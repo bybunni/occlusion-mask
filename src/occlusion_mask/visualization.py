@@ -171,6 +171,7 @@ def make_visibility_figure(
             "xaxis_title": "x forward",
             "yaxis_title": "y right",
             "zaxis_title": "z down",
+            "zaxis": {"autorange": "reversed"},
             "aspectmode": "data",
         },
         legend={"orientation": "h"},

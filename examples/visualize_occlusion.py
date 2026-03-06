@@ -7,11 +7,11 @@ from occlusion_mask import OcclusionProfile, PlatformState, ScanVolume, make_vis
 
 POINT_LABELS = ("A", "B", "C", "D", "E")
 DEFAULT_BOUNDARY_POINTS = [
-    (-40.0, 14.0, 3.0),
-    (-20.0, 12.0, 2.8),
-    (0.0, 8.0, 2.5),
-    (20.0, 12.0, 2.8),
-    (40.0, 14.0, 3.0),
+    (-40.0, 16.0, 3.0),
+    (-20.0, 13.0, 2.8),
+    (0.0, 10.0, 2.5),
+    (20.0, 13.0, 2.8),
+    (40.0, 16.0, 3.0),
 ]
 
 
@@ -59,6 +59,8 @@ def boundary_points_from_lists(
     elevation_values: list[float],
     range_values: list[float],
 ) -> list[tuple[float, float, float]]:
+    if any(value is None for value in azimuth_values + elevation_values + range_values):
+        raise ValueError("Every boundary point needs azimuth, elevation, and range values")
     return [
         (float(azimuth_deg), float(elevation_deg), float(range_m))
         for azimuth_deg, elevation_deg, range_m in zip(azimuth_values, elevation_values, range_values, strict=True)
@@ -72,13 +74,14 @@ def build_figure(
     roll_deg: float,
     boundary_points: list[tuple[float, float, float]] | tuple[tuple[float, float, float], ...] | None = None,
 ):
+    active_boundary_points = DEFAULT_BOUNDARY_POINTS if boundary_points is None else list(boundary_points)
     state = PlatformState.from_degrees(
         yaw_deg=yaw_deg,
         pitch_deg=pitch_deg,
         roll_deg=roll_deg,
         sensor_yaw_deg=0.0,
     )
-    profile = OCCLUSION_PROFILE if boundary_points is None else build_profile(boundary_points)
+    profile = OCCLUSION_PROFILE if boundary_points is None else build_profile(active_boundary_points)
     figure = make_visibility_figure(
         SAMPLE_POINTS,
         state,
@@ -101,8 +104,25 @@ def build_figure(
         bgcolor="#fcf8f1",
         xaxis={"backgroundcolor": "#fcf8f1", "gridcolor": "#d9cdb8", "zerolinecolor": "#6d7b84"},
         yaxis={"backgroundcolor": "#fcf8f1", "gridcolor": "#d9cdb8", "zerolinecolor": "#6d7b84"},
-        zaxis={"backgroundcolor": "#fcf8f1", "gridcolor": "#d9cdb8", "zerolinecolor": "#6d7b84"},
+        zaxis={
+            "backgroundcolor": "#fcf8f1",
+            "gridcolor": "#d9cdb8",
+            "zerolinecolor": "#6d7b84",
+            "autorange": "reversed",
+        },
     )
+    for trace in figure.data:
+        if trace.name == "occlusion boundary":
+            trace.mode = "lines+markers+text"
+            trace.text = list(POINT_LABELS)
+            trace.textposition = "top center"
+            trace.textfont = {"size": 12, "color": "#6e2016"}
+            trace.hovertext = [
+                f"Point {point_label}<br>az {azimuth_deg:+.1f} deg<br>el {elevation_deg:+.1f} deg<br>r {range_m:.1f} m"
+                for point_label, (azimuth_deg, elevation_deg, range_m) in zip(POINT_LABELS, active_boundary_points, strict=True)
+            ]
+            trace.hovertemplate = "%{hovertext}<extra></extra>"
+            break
     return figure
 
 
@@ -224,7 +244,7 @@ def boundary_editor() -> html.Div:
                         style={"margin": "0", "fontSize": "1.2rem", "fontWeight": "700"},
                     ),
                     html.P(
-                        "Edit the five body-attached boundary points in sensor azimuth, elevation, and range. Keep them ordered from left to right by azimuth.",
+                        "Edit the five body-attached boundary points in sensor azimuth, elevation, and range. Keep them ordered from left to right by azimuth. Higher positive elevation means a higher occlusion edge.",
                         style={"margin": "0", "lineHeight": "1.5", "color": "#33434d"},
                     ),
                 ],
@@ -250,6 +270,11 @@ def boundary_editor() -> html.Div:
                     "color": "#8a2f1d",
                 },
             ),
+            html.Div(
+                id="boundary-current-values",
+                children=current_boundary_summary(DEFAULT_BOUNDARY_POINTS),
+                style={"display": "grid", "gap": "0.8rem"},
+            ),
         ],
         style={
             "display": "grid",
@@ -260,6 +285,48 @@ def boundary_editor() -> html.Div:
             "background": "linear-gradient(180deg, #fff8ec 0%, #f4e6cf 100%)",
             "boxShadow": "0 18px 40px rgba(19, 33, 43, 0.08)",
         },
+    )
+
+
+def current_boundary_summary(boundary_points: list[tuple[float, float, float]]) -> html.Div:
+    return html.Div(
+        [
+            html.Div(
+                "Current A-E Settings",
+                style={"fontSize": "0.95rem", "fontWeight": "700", "letterSpacing": "0.04em"},
+            ),
+            html.Div(
+                [
+                    html.Div(
+                        [
+                            html.Div(
+                                f"Point {point_label}",
+                                style={"fontSize": "0.82rem", "fontWeight": "700", "letterSpacing": "0.04em"},
+                            ),
+                            html.Div(
+                                f"az {azimuth_deg:+.1f} deg | el {elevation_deg:+.1f} deg | r {range_m:.1f} m",
+                                style={"fontSize": "0.88rem", "color": "#22313a"},
+                            ),
+                        ],
+                        style={
+                            "display": "grid",
+                            "gap": "0.2rem",
+                            "padding": "0.8rem 0.9rem",
+                            "border": "1px solid #d6c8b0",
+                            "borderRadius": "14px",
+                            "background": "#fffdf8",
+                        },
+                    )
+                    for point_label, (azimuth_deg, elevation_deg, range_m) in zip(POINT_LABELS, boundary_points, strict=True)
+                ],
+                style={
+                    "display": "grid",
+                    "gridTemplateColumns": "repeat(auto-fit, minmax(220px, 1fr))",
+                    "gap": "0.75rem",
+                },
+            ),
+        ],
+        style={"display": "grid", "gap": "0.65rem"},
     )
 
 
@@ -275,7 +342,7 @@ def make_app() -> Dash:
                         style={"margin": "0", "fontSize": "2rem", "fontWeight": "700"},
                     ),
                     html.P(
-                        "Move the platform yaw, pitch, and roll sliders and edit the five boundary points to see a body-attached occlusion profile, authored in sensor azimuth/elevation/range space, rotate around the level-stabilized sensor.",
+                        "Move the platform yaw, pitch, and roll sliders and edit the five boundary points to see a body-attached occlusion profile, authored in sensor azimuth/elevation/range space, rotate around the level-stabilized sensor. Positive elevation is treated as higher in the occlusion mask, and the plot is drawn so +z down appears downward on screen.",
                         style={"margin": "0", "maxWidth": "68ch", "lineHeight": "1.5"},
                     ),
                 ],
@@ -342,6 +409,7 @@ def make_app() -> Dash:
     @app.callback(
         Output("occlusion-graph", "figure"),
         Output("boundary-status", "children"),
+        Output("boundary-current-values", "children"),
         Input("yaw-slider", "value"),
         Input("pitch-slider", "value"),
         Input("roll-slider", "value"),
@@ -357,13 +425,31 @@ def make_app() -> Dash:
         elevation_values: list[float],
         range_values: list[float],
     ):
-        boundary_points = boundary_points_from_lists(azimuth_values, elevation_values, range_values)
+        boundary_points = [
+            (
+                None if azimuth_deg is None else float(azimuth_deg),
+                None if elevation_deg is None else float(elevation_deg),
+                None if range_m is None else float(range_m),
+            )
+            for azimuth_deg, elevation_deg, range_m in zip(azimuth_values, elevation_values, range_values, strict=True)
+        ]
+
+        summary_points = [
+            (
+                DEFAULT_BOUNDARY_POINTS[index][0] if azimuth_deg is None else azimuth_deg,
+                DEFAULT_BOUNDARY_POINTS[index][1] if elevation_deg is None else elevation_deg,
+                DEFAULT_BOUNDARY_POINTS[index][2] if range_m is None else range_m,
+            )
+            for index, (azimuth_deg, elevation_deg, range_m) in enumerate(boundary_points)
+        ]
+
         try:
+            normalized_boundary_points = boundary_points_from_lists(azimuth_values, elevation_values, range_values)
             figure = build_figure(
                 yaw_deg=yaw_deg,
                 pitch_deg=pitch_deg,
                 roll_deg=roll_deg,
-                boundary_points=boundary_points,
+                boundary_points=normalized_boundary_points,
             )
         except ValueError as exc:
             fallback_figure = build_figure(
@@ -372,9 +458,13 @@ def make_app() -> Dash:
                 roll_deg=roll_deg,
                 boundary_points=DEFAULT_BOUNDARY_POINTS,
             )
-            return fallback_figure, f"Boundary update skipped: {exc}"
+            return fallback_figure, f"Boundary update skipped: {exc}", current_boundary_summary(summary_points)
 
-        return figure, "Boundary accepted. The profile is defined from Point A through Point E."
+        return (
+            figure,
+            "Boundary accepted. Higher positive elevation values create a higher occlusion edge from Point A through Point E.",
+            current_boundary_summary(normalized_boundary_points),
+        )
 
     return app
 

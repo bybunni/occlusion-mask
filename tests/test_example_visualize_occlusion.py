@@ -18,6 +18,7 @@ def test_build_figure_reflects_platform_angles_in_title() -> None:
     assert "yaw +12.0 deg" in figure.layout.title.text
     assert "pitch -4.0 deg" in figure.layout.title.text
     assert "roll +7.0 deg" in figure.layout.title.text
+    assert figure.layout.scene.zaxis.autorange == "reversed"
 
 
 def test_build_profile_rejects_unsorted_boundary_points() -> None:
@@ -43,8 +44,10 @@ def test_make_app_sets_expected_title() -> None:
     assert app.title == "Aircraft Occlusion Explorer"
     graph = app.layout.children[1]
     boundary_editor = app.layout.children[3]
+    summary_component = boundary_editor.children[3].children
     assert graph.figure.layout.title.text is not None
     assert f"yaw {MODULE.INITIAL_YAW_DEG:+.1f} deg" in graph.figure.layout.title.text
     assert f"pitch {MODULE.INITIAL_PITCH_DEG:+.1f} deg" in graph.figure.layout.title.text
     assert f"roll {MODULE.INITIAL_ROLL_DEG:+.1f} deg" in graph.figure.layout.title.text
     assert boundary_editor.children[0].children[0].children == "Occlusion Boundary Points"
+    assert summary_component.children[0].children == "Current A-E Settings"
