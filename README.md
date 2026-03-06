@@ -25,6 +25,8 @@ uv run pytest
 uv run python examples/visualize_occlusion.py
 ```
 
+The example script launches a local Dash app with interactive platform `yaw`, `pitch`, and `roll` sliders.
+
 ## Visual Demo
 
 The repository includes:
