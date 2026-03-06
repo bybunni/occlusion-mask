@@ -8,13 +8,7 @@ import numpy as np
 import plotly.graph_objects as go
 from numpy.typing import NDArray
 
-from .geometry import (
-    OcclusionProfile,
-    PlatformState,
-    ScanVolume,
-    evaluate_visibility,
-    ray_from_sensor_angles,
-)
+from .geometry import OcclusionProfile, PlatformState, ScanVolume, evaluate_visibility, ray_from_sensor_angles
 
 Vector = NDArray[np.float64]
 
@@ -74,39 +68,35 @@ def _frustum_wireframe_trace(scan_volume: ScanVolume) -> go.Scatter3d:
     )
 
 
-def _occlusion_ribbon_mesh(profile: OcclusionProfile, state: PlatformState, *, half_width: float) -> go.Mesh3d:
-    left_body = profile.points_body.copy()
-    right_body = profile.points_body.copy()
-    left_body[:, 1] = -half_width
-    right_body[:, 1] = half_width
+def _occlusion_profile_traces(profile: OcclusionProfile, state: PlatformState) -> list[go.BaseTraceType]:
+    boundary_points = profile.sensor_boundary_points(state)
+    vertices = np.vstack([np.zeros((1, 3), dtype=float), boundary_points])
+    count = boundary_points.shape[0]
 
-    left_sensor = (state.sensor_from_body @ left_body.T).T
-    right_sensor = (state.sensor_from_body @ right_body.T).T
-
-    vertices = np.vstack([left_sensor, right_sensor])
-    count = profile.points_body.shape[0]
-
-    i_values: list[int] = []
-    j_values: list[int] = []
-    k_values: list[int] = []
-    for index in range(count - 1):
-        i_values.extend([index, index + 1])
-        j_values.extend([index + 1, count + index + 1])
-        k_values.extend([count + index, count + index])
-
-    return go.Mesh3d(
+    fan = go.Mesh3d(
         x=vertices[:, 0],
         y=vertices[:, 1],
         z=vertices[:, 2],
-        i=i_values,
-        j=j_values,
-        k=k_values,
+        i=[0] * (count - 1),
+        j=list(range(1, count)),
+        k=list(range(2, count + 1)),
         color="#e45756",
-        opacity=0.35,
-        name="occlusion mask",
+        opacity=0.18,
+        name="occlusion fan",
         hoverinfo="skip",
         showscale=False,
     )
+    boundary = go.Scatter3d(
+        x=boundary_points[:, 0],
+        y=boundary_points[:, 1],
+        z=boundary_points[:, 2],
+        mode="lines+markers",
+        line={"color": "#c73b2f", "width": 7},
+        marker={"size": 5, "color": "#c73b2f"},
+        name="occlusion boundary",
+        hoverinfo="skip",
+    )
+    return [fan, boundary]
 
 
 def make_visibility_figure(
@@ -116,7 +106,6 @@ def make_visibility_figure(
     profile: OcclusionProfile,
     *,
     axis_length: float = 1.5,
-    ribbon_half_width: float = 2.5,
 ) -> go.Figure:
     """Render the scene in sensor coordinates with classified sample points."""
 
@@ -131,7 +120,7 @@ def make_visibility_figure(
     traces.extend(_frame_axis_traces(state.sensor_from_body, label="body", length=axis_length))
     traces.extend(_frame_axis_traces(state.sensor_from_world, label="world", length=axis_length))
     traces.append(_frustum_wireframe_trace(scan_volume))
-    traces.append(_occlusion_ribbon_mesh(profile, state, half_width=ribbon_half_width))
+    traces.extend(_occlusion_profile_traces(profile, state))
 
     groups = {
         "visible": {"color": "#54a24b", "points": [], "text": []},

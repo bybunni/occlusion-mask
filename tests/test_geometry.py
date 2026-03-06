@@ -10,23 +10,21 @@ from occlusion_mask import (
     ScanVolume,
     cartesian_to_sensor_angles,
     evaluate_visibility,
+    ray_from_sensor_angles,
     transform_world_to_sensor,
 )
 
 
 def make_profile() -> OcclusionProfile:
-    return OcclusionProfile(
-        points_body=np.array(
-            [
-                (0.0, 0.0, -0.8),
-                (1.0, 0.0, -0.7),
-                (2.0, 0.0, -0.5),
-                (3.0, 0.0, -0.25),
-                (4.0, 0.0, 0.0),
-            ],
-            dtype=float,
-        ),
-        occluded_if="z_le_boundary",
+    return OcclusionProfile.from_sensor_az_el_range_degrees(
+        [
+            (-40.0, 14.0, 3.0),
+            (-20.0, 12.0, 2.8),
+            (0.0, 8.0, 2.5),
+            (20.0, 12.0, 2.8),
+            (40.0, 14.0, 3.0),
+        ],
+        occluded_if="el_ge_boundary",
     )
 
 
@@ -62,13 +60,20 @@ def test_cartesian_to_sensor_angles() -> None:
 
 def test_boundary_interpolation_and_occlusion() -> None:
     profile = make_profile()
-    assert isclose(profile.boundary_z(2.5), -0.375)
-    assert profile.is_occluded_body_point((2.5, 1.0, -0.45))
-    assert not profile.is_occluded_body_point((2.5, 1.0, -0.2))
+    state = PlatformState.from_degrees()
+
+    boundary = profile.boundary_at_azimuth(np.deg2rad(10.0), state)
+
+    assert boundary is not None
+    boundary_elevation_rad, boundary_range_m = boundary
+    assert isclose(np.rad2deg(boundary_elevation_rad), 10.0)
+    assert isclose(boundary_range_m, 2.65)
+    assert profile.is_occluded_sensor_point(ray_from_sensor_angles(np.deg2rad(10.0), np.deg2rad(12.0), 5.0), state)
+    assert not profile.is_occluded_sensor_point(ray_from_sensor_angles(np.deg2rad(10.0), np.deg2rad(8.0), 5.0), state)
 
 
 def test_pitch_down_increases_occlusion() -> None:
-    point_ned = (4.0, 0.0, 0.4)
+    point_ned = tuple(ray_from_sensor_angles(0.0, np.deg2rad(0.0), 5.0))
     scan = make_scan()
     profile = make_profile()
 
@@ -82,7 +87,7 @@ def test_pitch_down_increases_occlusion() -> None:
 
 
 def test_visible_requires_in_scan_and_not_occluded() -> None:
-    result = evaluate_visibility((6.0, 0.0, 1.0), PlatformState.from_degrees(), make_scan(), make_profile())
+    result = evaluate_visibility(tuple(ray_from_sensor_angles(0.0, np.deg2rad(0.0), 5.0)), PlatformState.from_degrees(), make_scan(), make_profile())
     assert result.in_scan
     assert not result.occluded
     assert result.visible

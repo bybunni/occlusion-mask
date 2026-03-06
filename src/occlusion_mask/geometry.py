@@ -171,40 +171,94 @@ class ScanVolume:
 
 @dataclass(frozen=True)
 class OcclusionProfile:
-    """Five-point piecewise-linear occlusion boundary in the body x-z plane."""
+    """Five-point body-attached occlusion boundary.
+
+    The recommended constructor is ``from_sensor_az_el_range_degrees`` so the
+    profile can be authored with sensor-style spherical coordinates while still
+    remaining attached to the aircraft body.
+    """
 
     points_body: NDArray[np.float64]
-    occluded_if: str = "z_le_boundary"
+    occluded_if: str = "el_ge_boundary"
 
     def __post_init__(self) -> None:
         points = np.asarray(self.points_body, dtype=float)
         if points.shape != (5, 3):
             raise ValueError(f"points_body must have shape (5, 3), got {points.shape!r}")
-        if not np.allclose(points[:, 1], 0.0):
-            raise ValueError("All occlusion profile points must lie in the body y=0 plane")
-        order = np.argsort(points[:, 0])
-        points = points[order]
-        if np.any(np.diff(points[:, 0]) <= 0.0):
-            raise ValueError("Occlusion profile x coordinates must be strictly increasing")
-        if self.occluded_if not in {"z_le_boundary", "z_ge_boundary"}:
-            raise ValueError("occluded_if must be 'z_le_boundary' or 'z_ge_boundary'")
+        if self.occluded_if not in {"el_ge_boundary", "el_le_boundary"}:
+            raise ValueError("occluded_if must be 'el_ge_boundary' or 'el_le_boundary'")
         object.__setattr__(self, "points_body", points)
 
-    def boundary_z(self, x_value: float) -> float | None:
-        x_min = float(self.points_body[0, 0])
-        x_max = float(self.points_body[-1, 0])
-        if not (x_min <= x_value <= x_max):
-            return None
-        return float(np.interp(x_value, self.points_body[:, 0], self.points_body[:, 2]))
+    @classmethod
+    def from_sensor_az_el_range_degrees(
+        cls,
+        points_az_el_range_deg: ArrayLike3 | list[tuple[float, float, float]],
+        *,
+        occluded_if: str = "el_ge_boundary",
+    ) -> "OcclusionProfile":
+        points = np.asarray(points_az_el_range_deg, dtype=float)
+        if points.shape != (5, 3):
+            raise ValueError(f"points_az_el_range_deg must have shape (5, 3), got {points.shape!r}")
+        if np.any(np.diff(points[:, 0]) <= 0.0):
+            raise ValueError("Sensor-space occlusion points must be ordered left-to-right by increasing azimuth")
+        if np.any(points[:, 2] <= 0.0):
+            raise ValueError("Sensor-space occlusion point ranges must be positive")
 
-    def is_occluded_body_point(self, point_body: ArrayLike3, *, tolerance: float = 1e-9) -> bool:
-        point = _as_vector(point_body, name="point_body")
-        boundary_z = self.boundary_z(float(point[0]))
-        if boundary_z is None:
+        azimuth_rad = np.deg2rad(points[:, 0])
+        elevation_rad = np.deg2rad(points[:, 1])
+        ranges_m = points[:, 2]
+        points_body = np.vstack(
+            [
+                ray_from_sensor_angles(azimuth, elevation, range_m)
+                for azimuth, elevation, range_m in zip(azimuth_rad, elevation_rad, ranges_m, strict=True)
+            ]
+        )
+        return cls(points_body=points_body, occluded_if=occluded_if)
+
+    def sensor_boundary_points(self, state: PlatformState) -> NDArray[np.float64]:
+        """Return the body-attached boundary points transformed into sensor coordinates."""
+
+        return (state.sensor_from_body @ self.points_body.T).T
+
+    def sensor_boundary_angles(self, state: PlatformState) -> NDArray[np.float64]:
+        """Return transformed boundary points as sensor azimuth, elevation, and range."""
+
+        angles = np.asarray(
+            [cartesian_to_sensor_angles(point_sensor) for point_sensor in self.sensor_boundary_points(state)],
+            dtype=float,
+        )
+        return angles[np.argsort(angles[:, 0])]
+
+    def boundary_at_azimuth(self, azimuth_rad: float, state: PlatformState) -> tuple[float, float] | None:
+        boundary_angles = self.sensor_boundary_angles(state)
+        azimuth_min = float(boundary_angles[0, 0])
+        azimuth_max = float(boundary_angles[-1, 0])
+        if not (azimuth_min <= azimuth_rad <= azimuth_max):
+            return None
+
+        elevation_rad = float(np.interp(azimuth_rad, boundary_angles[:, 0], boundary_angles[:, 1]))
+        range_m = float(np.interp(azimuth_rad, boundary_angles[:, 0], boundary_angles[:, 2]))
+        return elevation_rad, range_m
+
+    def is_occluded_sensor_point(
+        self,
+        point_sensor: ArrayLike3,
+        state: PlatformState,
+        *,
+        tolerance: float = 1e-9,
+    ) -> bool:
+        point = _as_vector(point_sensor, name="point_sensor")
+        azimuth_rad, elevation_rad, range_m = cartesian_to_sensor_angles(point)
+        boundary = self.boundary_at_azimuth(azimuth_rad, state)
+        if boundary is None:
             return False
-        if self.occluded_if == "z_le_boundary":
-            return float(point[2]) <= boundary_z + tolerance
-        return float(point[2]) >= boundary_z - tolerance
+
+        boundary_elevation_rad, boundary_range_m = boundary
+        if range_m < boundary_range_m - tolerance:
+            return False
+        if self.occluded_if == "el_ge_boundary":
+            return elevation_rad >= boundary_elevation_rad - tolerance
+        return elevation_rad <= boundary_elevation_rad + tolerance
 
 
 @dataclass(frozen=True)
@@ -276,7 +330,7 @@ def evaluate_visibility(
     point_body = transform_sensor_to_body(point_sensor, state)
     azimuth_rad, elevation_rad, range_m = cartesian_to_sensor_angles(point_sensor)
     in_scan = scan_volume.contains(azimuth_rad, elevation_rad, range_m)
-    occluded = profile.is_occluded_body_point(point_body)
+    occluded = profile.is_occluded_sensor_point(point_sensor, state)
     return VisibilityResult(
         point_sensor=point_sensor,
         point_body=point_body,
