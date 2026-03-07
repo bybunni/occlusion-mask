@@ -49,6 +49,11 @@ def test_torch_mask_rejects_unsorted_points() -> None:
         )
 
 
+def test_torch_mask_defaults_to_float32_storage() -> None:
+    mask = make_torch_mask()
+    assert mask.points_az_el_rad.dtype == torch.float32
+
+
 def test_torch_mask_requires_column_vectors() -> None:
     mask = make_torch_mask()
     with pytest.raises(ValueError, match="shape \\(n, 1\\)"):
@@ -79,7 +84,7 @@ def test_torch_mask_pitch_translates_boundary() -> None:
         roll_deg=column([0.0]),
     )
     assert boundary.shape == (1, 1)
-    assert isclose(float(boundary.item()), 15.0)
+    assert isclose(float(boundary.item()), 15.0, rel_tol=1e-6, abs_tol=1e-6)
 
 
 def test_torch_mask_positive_roll_rotates_right_side_up() -> None:
@@ -180,7 +185,7 @@ def test_torch_boundary_matches_numpy_row_by_row() -> None:
         if target is None:
             assert torch.isnan(torch.tensor(actual)).item()
         else:
-            assert isclose(actual, target, rel_tol=1e-9, abs_tol=1e-9)
+            assert isclose(actual, target, rel_tol=1e-6, abs_tol=1e-6)
 
 
 def test_torch_runtime_smoke() -> None:
@@ -193,3 +198,33 @@ def test_torch_runtime_smoke() -> None:
         column([0.0]),
     )
     assert result.tolist() == [[True]]
+
+
+def test_torch_mask_ascii_render_contains_labels_and_footer() -> None:
+    mask = make_torch_mask()
+    rendered = mask.render_ascii_deg(
+        pitch_deg=5.0,
+        roll_deg=0.0,
+        width=33,
+        height=11,
+    )
+
+    assert "AzEl mask debug  pitch=5.0 deg  roll=0.0 deg" in rendered
+    assert "A=(" in rendered
+    assert "E=(" in rendered
+    for label in "ABCDE":
+        assert label in rendered
+
+    lines = rendered.splitlines()
+    grid_lines = lines[2:13]
+    assert len(grid_lines) == 11
+    assert all(len(line) == 33 for line in grid_lines)
+
+
+def test_torch_mask_ascii_render_requires_single_state() -> None:
+    mask = make_torch_mask()
+    with pytest.raises(ValueError, match="single-value tensor"):
+        mask.render_ascii_deg(
+            pitch_deg=column([0.0, 1.0]),
+            roll_deg=0.0,
+        )

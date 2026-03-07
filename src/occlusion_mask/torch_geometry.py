@@ -66,6 +66,22 @@ def _coerce_pitch_roll(*, pitch: Tensor, roll: Tensor) -> tuple[Tensor, Tensor]:
     return pitch.to(dtype=dtype), roll.to(dtype=dtype)
 
 
+def _coerce_single_value(value: float | Tensor, *, name: str, like: Tensor) -> Tensor:
+    if isinstance(value, torch.Tensor):
+        if value.numel() != 1:
+            raise ValueError(f"{name} must be a float or a single-value tensor")
+        tensor = value.reshape(1, 1).to(device=like.device)
+    else:
+        tensor = torch.tensor([[float(value)]], device=like.device)
+
+    if not torch.is_floating_point(tensor):
+        tensor = tensor.to(dtype=like.dtype)
+    else:
+        tensor = tensor.to(dtype=torch.promote_types(tensor.dtype, like.dtype))
+
+    return tensor
+
+
 @dataclass(frozen=True)
 class TorchAzElMask2D:
     """Torch-native 2D occlusion mask in sensor azimuth/elevation space."""
@@ -90,13 +106,13 @@ class TorchAzElMask2D:
     ) -> "TorchAzElMask2D":
         target_dtype = dtype
         if target_dtype is None and not isinstance(points_az_el_deg, torch.Tensor):
-            target_dtype = torch.float64
+            target_dtype = torch.float32
 
         points = torch.as_tensor(points_az_el_deg, device=device, dtype=target_dtype)
         if dtype is not None:
             points = points.to(dtype=dtype)
         elif not torch.is_floating_point(points):
-            points = points.to(torch.float64)
+            points = points.to(torch.float32)
 
         points = _validate_points(points, name="points_az_el_deg")
         return cls(
@@ -233,3 +249,113 @@ class TorchAzElMask2D:
         if self.occluded_if == "el_ge_boundary":
             return inside_span & (elevation_deg >= boundary - tolerance)
         return inside_span & (elevation_deg <= boundary + tolerance)
+
+    def render_ascii_deg(
+        self,
+        *,
+        pitch_deg: float | Tensor = 0.0,
+        roll_deg: float | Tensor = 0.0,
+        width: int = 61,
+        height: int = 21,
+        azimuth_limits_deg: tuple[float, float] | None = None,
+        elevation_limits_deg: tuple[float, float] | None = None,
+    ) -> str:
+        """Render one transformed mask state on an az/el plane as ASCII text."""
+
+        if width < 9:
+            raise ValueError("width must be at least 9")
+        if height < 7:
+            raise ValueError("height must be at least 7")
+
+        like = self.points_az_el_rad
+        pitch_tensor = _coerce_single_value(pitch_deg, name="pitch_deg", like=like)
+        roll_tensor = _coerce_single_value(roll_deg, name="roll_deg", like=like)
+        points = self.transformed_points_deg(
+            pitch_deg=pitch_tensor,
+            roll_deg=roll_tensor,
+        )[0]
+
+        az_points = points[:, 0]
+        el_points = points[:, 1]
+
+        if azimuth_limits_deg is None:
+            az_span = float((az_points.max() - az_points.min()).item())
+            az_margin = max(5.0, 0.08 * az_span)
+            az_min = float(az_points.min().item()) - az_margin
+            az_max = float(az_points.max().item()) + az_margin
+        else:
+            az_min, az_max = azimuth_limits_deg
+
+        if elevation_limits_deg is None:
+            el_span = float((el_points.max() - el_points.min()).item())
+            el_margin = max(3.0, 0.25 * max(el_span, 1.0))
+            el_min = float(el_points.min().item()) - el_margin
+            el_max = float(el_points.max().item()) + el_margin
+        else:
+            el_min, el_max = elevation_limits_deg
+
+        if not az_min < az_max:
+            raise ValueError("azimuth_limits_deg must satisfy min < max")
+        if not el_min < el_max:
+            raise ValueError("elevation_limits_deg must satisfy min < max")
+
+        grid = [[" " for _ in range(width)] for _ in range(height)]
+
+        def to_col(azimuth_value: float) -> int:
+            normalized = (azimuth_value - az_min) / (az_max - az_min)
+            return max(0, min(width - 1, int(round(normalized * (width - 1)))))
+
+        def to_row(elevation_value: float) -> int:
+            normalized = (el_max - elevation_value) / (el_max - el_min)
+            return max(0, min(height - 1, int(round(normalized * (height - 1)))))
+
+        if az_min <= 0.0 <= az_max:
+            axis_col = to_col(0.0)
+            for row in range(height):
+                grid[row][axis_col] = "|"
+
+        if el_min <= 0.0 <= el_max:
+            axis_row = to_row(0.0)
+            for col in range(width):
+                grid[axis_row][col] = "-"
+
+        if az_min <= 0.0 <= az_max and el_min <= 0.0 <= el_max:
+            grid[to_row(0.0)][to_col(0.0)] = "+"
+
+        for index in range(points.shape[0] - 1):
+            start = points[index]
+            end = points[index + 1]
+            start_col = to_col(float(start[0].item()))
+            start_row = to_row(float(start[1].item()))
+            end_col = to_col(float(end[0].item()))
+            end_row = to_row(float(end[1].item()))
+            steps = max(abs(end_col - start_col), abs(end_row - start_row), 1)
+
+            for step in range(steps + 1):
+                alpha = step / steps
+                col = int(round(start_col + alpha * (end_col - start_col)))
+                row = int(round(start_row + alpha * (end_row - start_row)))
+                grid[row][col] = "#"
+
+        for label, point in zip("ABCDE", points, strict=True):
+            col = to_col(float(point[0].item()))
+            row = to_row(float(point[1].item()))
+            grid[row][col] = label
+
+        header = [
+            (
+                f"AzEl mask debug  pitch={float(pitch_tensor.item()):.1f} deg  "
+                f"roll={float(roll_tensor.item()):.1f} deg"
+            ),
+            f"az=[{az_min:.1f}, {az_max:.1f}] deg  el=[{el_min:.1f}, {el_max:.1f}] deg",
+        ]
+
+        body = ["".join(row) for row in grid]
+        footer = [
+            (
+                f"{label}=({float(point[0].item()):6.2f} az, "
+                f"{float(point[1].item()):6.2f} el)"
+            )
+            for label, point in zip("ABCDE", points, strict=True)
+        ]
+        return "\n".join([*header, *body, *footer])
