@@ -8,7 +8,7 @@ import numpy as np
 import plotly.graph_objects as go
 from numpy.typing import NDArray
 
-from .geometry import OcclusionProfile, PlatformState, ScanVolume, evaluate_visibility, ray_from_sensor_angles
+from .geometry import AzElMask2D, OcclusionProfile, PlatformState, ScanVolume, evaluate_visibility, ray_from_sensor_angles
 
 Vector = NDArray[np.float64]
 
@@ -175,6 +175,139 @@ def make_visibility_figure(
             "aspectmode": "data",
         },
         legend={"orientation": "h"},
+        margin={"l": 0, "r": 0, "t": 48, "b": 0},
+    )
+    return figure
+
+
+def _az_el_mask_fill_trace(
+    points_az_el_deg: NDArray[np.float64],
+    *,
+    occluded_if: str,
+    el_limits_deg: tuple[float, float],
+) -> go.Scatter:
+    if occluded_if == "el_ge_boundary":
+        polygon_x = [float(points_az_el_deg[0, 0]), float(points_az_el_deg[-1, 0]), *points_az_el_deg[::-1, 0].tolist()]
+        polygon_y = [el_limits_deg[1], el_limits_deg[1], *points_az_el_deg[::-1, 1].tolist()]
+    else:
+        polygon_x = [float(points_az_el_deg[0, 0]), float(points_az_el_deg[-1, 0]), *points_az_el_deg[::-1, 0].tolist()]
+        polygon_y = [el_limits_deg[0], el_limits_deg[0], *points_az_el_deg[::-1, 1].tolist()]
+
+    return go.Scatter(
+        x=polygon_x,
+        y=polygon_y,
+        mode="lines",
+        line={"width": 0},
+        fill="toself",
+        fillcolor="rgba(228, 87, 86, 0.18)",
+        name="occluded region",
+        hoverinfo="skip",
+    )
+
+
+def make_az_el_mask_figure(
+    mask: AzElMask2D,
+    *,
+    pitch_deg: float = 0.0,
+    roll_deg: float = 0.0,
+    query_point_deg: tuple[float, float] | None = None,
+    az_limits_deg: tuple[float, float] = (-50.0, 50.0),
+    el_limits_deg: tuple[float, float] = (-25.0, 25.0),
+) -> go.Figure:
+    """Render a 2D azimuth/elevation view of the simplified mask."""
+
+    nominal_points = mask.points_az_el_deg
+    transformed_points = mask.transformed_points_deg(pitch_deg=pitch_deg, roll_deg=roll_deg)
+
+    traces: list[go.BaseTraceType] = []
+    traces.append(
+        go.Scatter(
+            x=nominal_points[:, 0],
+            y=nominal_points[:, 1],
+            mode="lines+markers",
+            line={"color": "#99785b", "width": 2, "dash": "dash"},
+            marker={"size": 6, "color": "#99785b"},
+            name="nominal mask",
+            hoverinfo="skip",
+        )
+    )
+    traces.append(
+        _az_el_mask_fill_trace(
+            transformed_points,
+            occluded_if=mask.occluded_if,
+            el_limits_deg=el_limits_deg,
+        )
+    )
+    traces.append(
+        go.Scatter(
+            x=transformed_points[:, 0],
+            y=transformed_points[:, 1],
+            mode="lines+markers",
+            line={"color": "#c73b2f", "width": 4},
+            marker={"size": 8, "color": "#c73b2f"},
+            name="transformed mask",
+            hoverinfo="skip",
+        )
+    )
+
+    if query_point_deg is not None:
+        query_azimuth_deg, query_elevation_deg = query_point_deg
+        occluded = mask.is_occluded_deg(
+            query_azimuth_deg,
+            query_elevation_deg,
+            pitch_deg=pitch_deg,
+            roll_deg=roll_deg,
+        )
+        boundary_elevation_deg = mask.boundary_elevation_deg(
+            query_azimuth_deg,
+            pitch_deg=pitch_deg,
+            roll_deg=roll_deg,
+        )
+        query_color = "#e45756" if occluded else "#54a24b"
+        if boundary_elevation_deg is None:
+            hover_text = (
+                f"az={query_azimuth_deg:+.1f} deg"
+                f"<br>el={query_elevation_deg:+.1f} deg"
+                "<br>boundary=outside mask span"
+                f"<br>occluded={occluded}"
+            )
+        else:
+            hover_text = (
+                f"az={query_azimuth_deg:+.1f} deg"
+                f"<br>el={query_elevation_deg:+.1f} deg"
+                f"<br>boundary={boundary_elevation_deg:+.1f} deg"
+                f"<br>occluded={occluded}"
+            )
+        traces.append(
+            go.Scatter(
+                x=[query_azimuth_deg],
+                y=[query_elevation_deg],
+                mode="markers",
+                marker={"size": 12, "color": query_color, "line": {"color": "#13212b", "width": 1.5}},
+                name="query point",
+                text=[hover_text],
+                hovertemplate="%{text}<extra></extra>",
+            )
+        )
+
+    figure = go.Figure(traces)
+    figure.update_layout(
+        title="2D sensor azimuth/elevation mask",
+        xaxis={
+            "title": "azimuth (deg)",
+            "range": list(az_limits_deg),
+            "gridcolor": "#d9cdb8",
+            "zerolinecolor": "#6d7b84",
+        },
+        yaxis={
+            "title": "elevation (deg)",
+            "range": list(el_limits_deg),
+            "gridcolor": "#d9cdb8",
+            "zerolinecolor": "#6d7b84",
+        },
+        legend={"orientation": "h"},
+        plot_bgcolor="#fcf8f1",
+        paper_bgcolor="#f5f0e6",
         margin={"l": 0, "r": 0, "t": 48, "b": 0},
     )
     return figure

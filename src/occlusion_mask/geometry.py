@@ -10,6 +10,7 @@ from numpy.typing import NDArray
 
 Vector = NDArray[np.float64]
 ArrayLike3 = Vector | tuple[float, float, float] | list[float]
+ArrayLike2 = NDArray[np.float64] | list[tuple[float, float]] | tuple[tuple[float, float], ...]
 
 
 def _as_vector(value: ArrayLike3, *, name: str) -> Vector:
@@ -166,6 +167,146 @@ class ScanVolume:
             self.az_min_rad <= azimuth_rad <= self.az_max_rad
             and self.el_min_rad <= elevation_rad <= self.el_max_rad
             and self.range_min_m <= range_m <= self.range_max_m
+        )
+
+
+@dataclass(frozen=True)
+class AzElMask2D:
+    """Simplified 2D occlusion mask in sensor azimuth/elevation space.
+
+    The base mask is authored as a piecewise-linear curve in sensor azimuth and
+    elevation. The simplified platform motion model applies:
+
+    - roll: a planar rotation of the curve in az/el space
+    - pitch: a vertical translation of the curve in elevation
+    """
+
+    points_az_el_rad: NDArray[np.float64]
+    occluded_if: str = "el_ge_boundary"
+
+    def __post_init__(self) -> None:
+        points = np.asarray(self.points_az_el_rad, dtype=float)
+        if points.shape != (5, 2):
+            raise ValueError(f"points_az_el_rad must have shape (5, 2), got {points.shape!r}")
+        if np.any(np.diff(points[:, 0]) <= 0.0):
+            raise ValueError("2D mask points must be ordered left-to-right by increasing azimuth")
+        if self.occluded_if not in {"el_ge_boundary", "el_le_boundary"}:
+            raise ValueError("occluded_if must be 'el_ge_boundary' or 'el_le_boundary'")
+        object.__setattr__(self, "points_az_el_rad", points)
+
+    @classmethod
+    def from_degrees(
+        cls,
+        points_az_el_deg: ArrayLike2,
+        *,
+        occluded_if: str = "el_ge_boundary",
+    ) -> "AzElMask2D":
+        points = np.asarray(points_az_el_deg, dtype=float)
+        if points.shape != (5, 2):
+            raise ValueError(f"points_az_el_deg must have shape (5, 2), got {points.shape!r}")
+        if np.any(np.diff(points[:, 0]) <= 0.0):
+            raise ValueError("2D mask points must be ordered left-to-right by increasing azimuth")
+        return cls(points_az_el_rad=np.deg2rad(points), occluded_if=occluded_if)
+
+    @property
+    def points_az_el_deg(self) -> NDArray[np.float64]:
+        return np.rad2deg(self.points_az_el_rad)
+
+    def transformed_points_rad(
+        self,
+        *,
+        pitch_rad: float = 0.0,
+        roll_rad: float = 0.0,
+    ) -> NDArray[np.float64]:
+        rotation = np.array(
+            [
+                [cos(roll_rad), -sin(roll_rad)],
+                [sin(roll_rad), cos(roll_rad)],
+            ],
+            dtype=float,
+        )
+        transformed = (rotation @ self.points_az_el_rad.T).T
+        transformed[:, 1] += pitch_rad
+        return transformed[np.argsort(transformed[:, 0])]
+
+    def transformed_points_deg(
+        self,
+        *,
+        pitch_deg: float = 0.0,
+        roll_deg: float = 0.0,
+    ) -> NDArray[np.float64]:
+        return np.rad2deg(
+            self.transformed_points_rad(
+                pitch_rad=radians(pitch_deg),
+                roll_rad=radians(roll_deg),
+            )
+        )
+
+    def boundary_elevation_rad(
+        self,
+        azimuth_rad: float,
+        *,
+        pitch_rad: float = 0.0,
+        roll_rad: float = 0.0,
+    ) -> float | None:
+        points = self.transformed_points_rad(pitch_rad=pitch_rad, roll_rad=roll_rad)
+        azimuth_min = float(points[0, 0])
+        azimuth_max = float(points[-1, 0])
+        if not (azimuth_min <= azimuth_rad <= azimuth_max):
+            return None
+        return float(np.interp(azimuth_rad, points[:, 0], points[:, 1]))
+
+    def boundary_elevation_deg(
+        self,
+        azimuth_deg: float,
+        *,
+        pitch_deg: float = 0.0,
+        roll_deg: float = 0.0,
+    ) -> float | None:
+        boundary_rad = self.boundary_elevation_rad(
+            radians(azimuth_deg),
+            pitch_rad=radians(pitch_deg),
+            roll_rad=radians(roll_deg),
+        )
+        if boundary_rad is None:
+            return None
+        return float(np.rad2deg(boundary_rad))
+
+    def is_occluded_rad(
+        self,
+        azimuth_rad: float,
+        elevation_rad: float,
+        *,
+        pitch_rad: float = 0.0,
+        roll_rad: float = 0.0,
+        tolerance: float = 1e-9,
+    ) -> bool:
+        boundary_elevation_rad = self.boundary_elevation_rad(
+            azimuth_rad,
+            pitch_rad=pitch_rad,
+            roll_rad=roll_rad,
+        )
+        if boundary_elevation_rad is None:
+            return False
+        if self.occluded_if == "el_ge_boundary":
+            return elevation_rad >= boundary_elevation_rad - tolerance
+        return elevation_rad <= boundary_elevation_rad + tolerance
+
+    def is_occluded_deg(
+        self,
+        azimuth_deg: float,
+        elevation_deg: float,
+        *,
+        pitch_deg: float = 0.0,
+        roll_deg: float = 0.0,
+        tolerance_deg: float = 1e-7,
+    ) -> bool:
+        return self.is_occluded_rad(
+            radians(azimuth_deg),
+            radians(elevation_deg),
+            pitch_rad=radians(pitch_deg),
+            roll_rad=radians(roll_deg),
+            tolerance=radians(tolerance_deg),
         )
 
 

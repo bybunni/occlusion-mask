@@ -5,6 +5,7 @@ from math import isclose
 import numpy as np
 
 from occlusion_mask import (
+    AzElMask2D,
     OcclusionProfile,
     PlatformState,
     ScanVolume,
@@ -36,6 +37,18 @@ def make_scan() -> ScanVolume:
         el_max_deg=30.0,
         range_min_m=0.5,
         range_max_m=100.0,
+    )
+
+
+def make_mask_2d() -> AzElMask2D:
+    return AzElMask2D.from_degrees(
+        [
+            (-40.0, 16.0),
+            (-20.0, 13.0),
+            (0.0, 10.0),
+            (20.0, 13.0),
+            (40.0, 16.0),
+        ]
     )
 
 
@@ -97,3 +110,46 @@ def test_scan_volume_rejects_large_azimuth() -> None:
     result = evaluate_visibility((2.0, 10.0, 0.0), PlatformState.from_degrees(), make_scan(), make_profile())
     assert not result.in_scan
     assert not result.visible
+
+
+def test_2d_mask_pitch_translates_boundary() -> None:
+    mask = make_mask_2d()
+
+    boundary_nominal = mask.boundary_elevation_deg(0.0)
+    boundary_shifted = mask.boundary_elevation_deg(0.0, pitch_deg=5.0)
+
+    assert boundary_nominal is not None
+    assert boundary_shifted is not None
+    assert isclose(boundary_nominal, 10.0)
+    assert isclose(boundary_shifted, 15.0)
+
+
+def test_2d_mask_positive_roll_rotates_right_side_up() -> None:
+    flat_mask = AzElMask2D.from_degrees(
+        [
+            (-40.0, 0.0),
+            (-20.0, 0.0),
+            (0.0, 0.0),
+            (20.0, 0.0),
+            (40.0, 0.0),
+        ]
+    )
+
+    transformed = flat_mask.transformed_points_deg(roll_deg=10.0)
+
+    assert transformed[0, 1] < 0.0
+    assert transformed[-1, 1] > 0.0
+
+
+def test_2d_mask_occlusion_high_side() -> None:
+    mask = make_mask_2d()
+
+    assert mask.is_occluded_deg(0.0, 12.0)
+    assert not mask.is_occluded_deg(0.0, 8.0)
+
+
+def test_2d_mask_query_outside_span_is_clear() -> None:
+    mask = make_mask_2d()
+
+    assert mask.boundary_elevation_deg(55.0) is None
+    assert not mask.is_occluded_deg(55.0, 20.0)

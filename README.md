@@ -33,4 +33,5 @@ The example script launches a local Dash app with interactive platform `yaw`, `p
 The repository includes:
 
 - `examples/visualize_occlusion.py` for a quick Plotly scene
+- `examples/visualize_mask_2d.py` for a simplified 2D azimuth/elevation mask explorer
 - `notebooks/occlusion_demo.ipynb` for a guided visual walkthrough
