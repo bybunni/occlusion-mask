@@ -3,6 +3,7 @@ from __future__ import annotations
 from math import isclose
 
 import numpy as np
+import pytest
 
 from occlusion_mask import (
     AzElMask2D,
@@ -40,7 +41,7 @@ def make_scan() -> ScanVolume:
     )
 
 
-def make_mask_2d() -> AzElMask2D:
+def make_mask_2d(*, occluded_if: str = "el_ge_boundary") -> AzElMask2D:
     return AzElMask2D.from_degrees(
         [
             (-40.0, 16.0),
@@ -48,7 +49,8 @@ def make_mask_2d() -> AzElMask2D:
             (0.0, 10.0),
             (20.0, 13.0),
             (40.0, 16.0),
-        ]
+        ],
+        occluded_if=occluded_if,
     )
 
 
@@ -112,16 +114,14 @@ def test_scan_volume_rejects_large_azimuth() -> None:
     assert not result.visible
 
 
-def test_2d_mask_pitch_translates_boundary() -> None:
+def test_2d_mask_pitch_translates_polygon_points() -> None:
     mask = make_mask_2d()
 
-    boundary_nominal = mask.boundary_elevation_deg(0.0)
-    boundary_shifted = mask.boundary_elevation_deg(0.0, pitch_deg=5.0)
+    nominal = mask.transformed_points_deg(sort_by_azimuth=False)
+    shifted = mask.transformed_points_deg(pitch_deg=5.0, sort_by_azimuth=False)
 
-    assert boundary_nominal is not None
-    assert boundary_shifted is not None
-    assert isclose(boundary_nominal, 10.0)
-    assert isclose(boundary_shifted, 15.0)
+    assert isclose(nominal[2, 1], 10.0)
+    assert isclose(shifted[2, 1], 15.0)
 
 
 def test_2d_mask_positive_roll_rotates_right_side_down() -> None:
@@ -141,15 +141,49 @@ def test_2d_mask_positive_roll_rotates_right_side_down() -> None:
     assert transformed[-1, 1] < 0.0
 
 
-def test_2d_mask_occlusion_high_side() -> None:
+def test_2d_mask_polygon_points_close_back_to_a() -> None:
+    mask = make_mask_2d()
+    polygon = mask.polygon_points_deg()
+
+    assert polygon.shape == (6, 2)
+    assert np.allclose(polygon[0], polygon[-1])
+
+
+def test_2d_mask_point_inside_polygon_is_occluded() -> None:
     mask = make_mask_2d()
 
     assert mask.is_occluded_deg(0.0, 12.0)
-    assert not mask.is_occluded_deg(0.0, 8.0)
 
 
-def test_2d_mask_query_outside_span_is_clear() -> None:
+def test_2d_mask_point_outside_polygon_is_clear() -> None:
     mask = make_mask_2d()
 
-    assert mask.boundary_elevation_deg(55.0) is None
+    assert not mask.is_occluded_deg(0.0, 8.0)
     assert not mask.is_occluded_deg(55.0, 20.0)
+
+
+def test_2d_mask_point_on_edge_is_occluded() -> None:
+    mask = make_mask_2d()
+
+    assert mask.is_occluded_deg(-10.0, 11.5)
+
+
+def test_2d_mask_point_on_vertex_is_occluded() -> None:
+    mask = make_mask_2d()
+
+    assert mask.is_occluded_deg(0.0, 10.0)
+
+
+def test_2d_mask_occluded_if_is_ignored_for_polygon_mode() -> None:
+    ge_mask = make_mask_2d(occluded_if="el_ge_boundary")
+    le_mask = make_mask_2d(occluded_if="el_le_boundary")
+
+    assert ge_mask.is_occluded_deg(0.0, 12.0) == le_mask.is_occluded_deg(0.0, 12.0)
+    assert ge_mask.is_occluded_deg(0.0, 8.0) == le_mask.is_occluded_deg(0.0, 8.0)
+
+
+def test_2d_mask_boundary_helpers_raise_for_polygon_mode() -> None:
+    mask = make_mask_2d()
+
+    with pytest.raises(NotImplementedError, match="single boundary elevation"):
+        mask.boundary_elevation_deg(0.0)

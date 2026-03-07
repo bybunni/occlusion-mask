@@ -8,7 +8,7 @@ import torch
 from occlusion_mask import AzElMask2D, TorchAzElMask2D
 
 
-def make_numpy_mask() -> AzElMask2D:
+def make_numpy_mask(*, occluded_if: str = "el_ge_boundary") -> AzElMask2D:
     return AzElMask2D.from_degrees(
         [
             (-40.0, 16.0),
@@ -16,11 +16,12 @@ def make_numpy_mask() -> AzElMask2D:
             (0.0, 10.0),
             (20.0, 13.0),
             (40.0, 16.0),
-        ]
+        ],
+        occluded_if=occluded_if,
     )
 
 
-def make_torch_mask() -> TorchAzElMask2D:
+def make_torch_mask(*, occluded_if: str = "el_ge_boundary") -> TorchAzElMask2D:
     return TorchAzElMask2D.from_degrees(
         [
             (-40.0, 16.0),
@@ -28,7 +29,8 @@ def make_torch_mask() -> TorchAzElMask2D:
             (0.0, 10.0),
             (20.0, 13.0),
             (40.0, 16.0),
-        ]
+        ],
+        occluded_if=occluded_if,
     )
 
 
@@ -76,15 +78,16 @@ def test_torch_mask_requires_matching_shapes() -> None:
         )
 
 
-def test_torch_mask_pitch_translates_boundary() -> None:
+def test_torch_mask_pitch_translates_polygon_points() -> None:
     mask = make_torch_mask()
-    boundary = mask.boundary_elevation_deg(
-        column([0.0]),
+    transformed = mask.transformed_points_deg(
         pitch_deg=column([5.0]),
         roll_deg=column([0.0]),
+        sort_by_azimuth=False,
     )
-    assert boundary.shape == (1, 1)
-    assert isclose(float(boundary.item()), 15.0, rel_tol=1e-6, abs_tol=1e-6)
+
+    assert transformed.shape == (1, 5, 2)
+    assert isclose(float(transformed[0, 2, 1]), 15.0, rel_tol=1e-6, abs_tol=1e-6)
 
 
 def test_torch_mask_positive_roll_rotates_right_side_down() -> None:
@@ -107,6 +110,17 @@ def test_torch_mask_positive_roll_rotates_right_side_down() -> None:
     assert float(transformed[0, -1, 1]) < 0.0
 
 
+def test_torch_polygon_points_close_back_to_a() -> None:
+    mask = make_torch_mask()
+    polygon = mask.polygon_points_deg(
+        pitch_deg=column([0.0]),
+        roll_deg=column([0.0]),
+    )
+
+    assert polygon.shape == (1, 6, 2)
+    assert torch.allclose(polygon[:, 0, :], polygon[:, -1, :])
+
+
 def test_torch_mask_returns_bool_column_tensor() -> None:
     mask = make_torch_mask()
     occluded = mask.is_occluded_deg(
@@ -121,22 +135,38 @@ def test_torch_mask_returns_bool_column_tensor() -> None:
     assert occluded.tolist() == [[True], [False]]
 
 
-def test_torch_mask_outside_span_returns_false_and_nan_boundary() -> None:
+def test_torch_mask_point_on_edge_is_occluded() -> None:
     mask = make_torch_mask()
-    boundary = mask.boundary_elevation_deg(
-        column([55.0]),
-        pitch_deg=column([0.0]),
-        roll_deg=column([0.0]),
-    )
     occluded = mask.is_occluded_deg(
-        column([55.0]),
-        column([20.0]),
+        column([-10.0]),
+        column([11.5]),
         column([0.0]),
         column([0.0]),
     )
 
-    assert torch.isnan(boundary).item()
-    assert occluded.tolist() == [[False]]
+    assert occluded.tolist() == [[True]]
+
+
+def test_torch_mask_point_on_vertex_is_occluded() -> None:
+    mask = make_torch_mask()
+    occluded = mask.is_occluded_deg(
+        column([0.0]),
+        column([10.0]),
+        column([0.0]),
+        column([0.0]),
+    )
+
+    assert occluded.tolist() == [[True]]
+
+
+def test_torch_mask_occluded_if_is_ignored_for_polygon_mode() -> None:
+    ge_mask = make_torch_mask(occluded_if="el_ge_boundary")
+    le_mask = make_torch_mask(occluded_if="el_le_boundary")
+
+    ge_result = ge_mask.is_occluded_deg(column([0.0, 0.0]), column([12.0, 8.0]), column([0.0, 0.0]), column([0.0, 0.0]))
+    le_result = le_mask.is_occluded_deg(column([0.0, 0.0]), column([12.0, 8.0]), column([0.0, 0.0]), column([0.0, 0.0]))
+
+    assert torch.equal(ge_result, le_result)
 
 
 def test_torch_mask_matches_numpy_row_by_row() -> None:
@@ -162,30 +192,15 @@ def test_torch_mask_matches_numpy_row_by_row() -> None:
     assert torch_result.tolist() == expected
 
 
-def test_torch_boundary_matches_numpy_row_by_row() -> None:
-    numpy_mask = make_numpy_mask()
-    torch_mask = make_torch_mask()
+def test_torch_boundary_helpers_raise_for_polygon_mode() -> None:
+    mask = make_torch_mask()
 
-    azimuth = [0.0, 5.0, -15.0, 55.0]
-    pitch = [0.0, -6.0, 3.0, 0.0]
-    roll = [0.0, 8.0, -4.0, 0.0]
-
-    torch_boundary = torch_mask.boundary_elevation_deg(
-        column(azimuth),
-        pitch_deg=column(pitch),
-        roll_deg=column(roll),
-    )
-
-    expected = [
-        numpy_mask.boundary_elevation_deg(azimuth_deg=az, pitch_deg=pt, roll_deg=rl)
-        for az, pt, rl in zip(azimuth, pitch, roll, strict=True)
-    ]
-
-    for actual, target in zip(torch_boundary.squeeze(1).tolist(), expected, strict=True):
-        if target is None:
-            assert torch.isnan(torch.tensor(actual)).item()
-        else:
-            assert isclose(actual, target, rel_tol=1e-6, abs_tol=1e-6)
+    with pytest.raises(NotImplementedError, match="single boundary elevation"):
+        mask.boundary_elevation_deg(
+            column([0.0]),
+            pitch_deg=column([0.0]),
+            roll_deg=column([0.0]),
+        )
 
 
 def test_torch_runtime_smoke() -> None:
@@ -219,6 +234,30 @@ def test_torch_mask_ascii_render_contains_labels_and_footer() -> None:
     grid_lines = lines[2:13]
     assert len(grid_lines) == 11
     assert all(len(line) == 33 for line in grid_lines)
+
+
+def test_torch_mask_ascii_render_footer_uses_original_point_labels() -> None:
+    mask = TorchAzElMask2D.from_degrees(
+        [
+            (-40.0, 0.0),
+            (-20.0, 0.0),
+            (0.0, 0.0),
+            (20.0, 50.0),
+            (40.0, 0.0),
+        ]
+    )
+    transformed = mask.transformed_points_deg(
+        pitch_deg=column([0.0]),
+        roll_deg=column([60.0]),
+        sort_by_azimuth=False,
+    )[0]
+    rendered = mask.render_ascii_deg(pitch_deg=0.0, roll_deg=60.0, width=41, height=13)
+
+    expected_d = f"D=({float(transformed[3, 0].item()):6.2f} az, {float(transformed[3, 1].item()):6.2f} el)"
+    expected_e = f"E=({float(transformed[4, 0].item()):6.2f} az, {float(transformed[4, 1].item()):6.2f} el)"
+
+    assert expected_d in rendered
+    assert expected_e in rendered
 
 
 def test_torch_mask_ascii_render_requires_single_state() -> None:

@@ -172,14 +172,12 @@ class ScanVolume:
 
 @dataclass(frozen=True)
 class AzElMask2D:
-    """Simplified 2D occlusion mask in sensor azimuth/elevation space.
+    """Simplified 2D occlusion mask as a closed polygon in sensor az/el space.
 
-    The base mask is authored as a piecewise-linear curve in sensor azimuth and
-    elevation. The simplified platform motion model applies:
-
-    - roll: a clockwise planar rotation of the curve in az/el space for
-      positive body roll
-    - pitch: a vertical translation of the curve in elevation
+    The authored points A-E define polygon vertices in sensor azimuth and
+    elevation. After the simplified motion model is applied, occlusion is
+    computed by testing whether the query point lies inside the transformed
+    polygon A-B-C-D-E-A.
     """
 
     points_az_el_rad: NDArray[np.float64]
@@ -218,6 +216,7 @@ class AzElMask2D:
         *,
         pitch_rad: float = 0.0,
         roll_rad: float = 0.0,
+        sort_by_azimuth: bool = True,
     ) -> NDArray[np.float64]:
         rotation = np.array(
             [
@@ -228,16 +227,46 @@ class AzElMask2D:
         )
         transformed = (rotation @ self.points_az_el_rad.T).T
         transformed[:, 1] += pitch_rad
-        return transformed[np.argsort(transformed[:, 0])]
+        if sort_by_azimuth:
+            return transformed[np.argsort(transformed[:, 0])]
+        return transformed
 
     def transformed_points_deg(
         self,
         *,
         pitch_deg: float = 0.0,
         roll_deg: float = 0.0,
+        sort_by_azimuth: bool = True,
     ) -> NDArray[np.float64]:
         return np.rad2deg(
             self.transformed_points_rad(
+                pitch_rad=radians(pitch_deg),
+                roll_rad=radians(roll_deg),
+                sort_by_azimuth=sort_by_azimuth,
+            )
+        )
+
+    def polygon_points_rad(
+        self,
+        *,
+        pitch_rad: float = 0.0,
+        roll_rad: float = 0.0,
+    ) -> NDArray[np.float64]:
+        points = self.transformed_points_rad(
+            pitch_rad=pitch_rad,
+            roll_rad=roll_rad,
+            sort_by_azimuth=False,
+        )
+        return np.vstack([points, points[:1]])
+
+    def polygon_points_deg(
+        self,
+        *,
+        pitch_deg: float = 0.0,
+        roll_deg: float = 0.0,
+    ) -> NDArray[np.float64]:
+        return np.rad2deg(
+            self.polygon_points_rad(
                 pitch_rad=radians(pitch_deg),
                 roll_rad=radians(roll_deg),
             )
@@ -250,12 +279,10 @@ class AzElMask2D:
         pitch_rad: float = 0.0,
         roll_rad: float = 0.0,
     ) -> float | None:
-        points = self.transformed_points_rad(pitch_rad=pitch_rad, roll_rad=roll_rad)
-        azimuth_min = float(points[0, 0])
-        azimuth_max = float(points[-1, 0])
-        if not (azimuth_min <= azimuth_rad <= azimuth_max):
-            return None
-        return float(np.interp(azimuth_rad, points[:, 0], points[:, 1]))
+        raise NotImplementedError(
+            "Closed polygon 2D masks do not define a single boundary elevation. "
+            "Use is_occluded_* or polygon_points_* instead."
+        )
 
     def boundary_elevation_deg(
         self,
@@ -264,14 +291,10 @@ class AzElMask2D:
         pitch_deg: float = 0.0,
         roll_deg: float = 0.0,
     ) -> float | None:
-        boundary_rad = self.boundary_elevation_rad(
-            radians(azimuth_deg),
-            pitch_rad=radians(pitch_deg),
-            roll_rad=radians(roll_deg),
+        raise NotImplementedError(
+            "Closed polygon 2D masks do not define a single boundary elevation. "
+            "Use is_occluded_* or polygon_points_* instead."
         )
-        if boundary_rad is None:
-            return None
-        return float(np.rad2deg(boundary_rad))
 
     def is_occluded_rad(
         self,
@@ -282,16 +305,35 @@ class AzElMask2D:
         roll_rad: float = 0.0,
         tolerance: float = 1e-9,
     ) -> bool:
-        boundary_elevation_rad = self.boundary_elevation_rad(
-            azimuth_rad,
+        polygon = self.polygon_points_rad(
             pitch_rad=pitch_rad,
             roll_rad=roll_rad,
         )
-        if boundary_elevation_rad is None:
-            return False
-        if self.occluded_if == "el_ge_boundary":
-            return elevation_rad >= boundary_elevation_rad - tolerance
-        return elevation_rad <= boundary_elevation_rad + tolerance
+        x_value = azimuth_rad
+        y_value = elevation_rad
+        inside = False
+
+        for start, end in zip(polygon[:-1], polygon[1:], strict=True):
+            x1, y1 = float(start[0]), float(start[1])
+            x2, y2 = float(end[0]), float(end[1])
+
+            cross = (x_value - x1) * (y2 - y1) - (y_value - y1) * (x2 - x1)
+            if abs(cross) <= tolerance:
+                if (
+                    min(x1, x2) - tolerance <= x_value <= max(x1, x2) + tolerance
+                    and min(y1, y2) - tolerance <= y_value <= max(y1, y2) + tolerance
+                ):
+                    return True
+
+            straddles = (y1 > y_value) != (y2 > y_value)
+            if not straddles:
+                continue
+
+            x_intersection = x1 + (y_value - y1) * (x2 - x1) / (y2 - y1)
+            if x_intersection >= x_value - tolerance:
+                inside = not inside
+
+        return inside
 
     def is_occluded_deg(
         self,

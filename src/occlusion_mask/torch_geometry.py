@@ -84,10 +84,7 @@ def _coerce_single_value(value: float | Tensor, *, name: str, like: Tensor) -> T
 
 @dataclass(frozen=True)
 class TorchAzElMask2D:
-    """Torch-native 2D occlusion mask in sensor azimuth/elevation space.
-
-    Positive body roll rotates the piecewise mask clockwise in the az/el plane.
-    """
+    """Torch-native 2D occlusion mask as a closed polygon in sensor az/el space."""
 
     points_az_el_rad: Tensor
     occluded_if: str = "el_ge_boundary"
@@ -135,6 +132,7 @@ class TorchAzElMask2D:
         *,
         pitch_rad: Tensor,
         roll_rad: Tensor,
+        sort_by_azimuth: bool = True,
     ) -> Tensor:
         pitch_rad, roll_rad = _coerce_pitch_roll(pitch=pitch_rad, roll=roll_rad)
         mask_points = self._points_like(pitch_rad)
@@ -147,9 +145,10 @@ class TorchAzElMask2D:
         transformed_az = cos_roll * mask_az + sin_roll * mask_el
         transformed_el = -sin_roll * mask_az + cos_roll * mask_el + pitch_rad
 
-        order = transformed_az.argsort(dim=1)
-        transformed_az = transformed_az.gather(1, order)
-        transformed_el = transformed_el.gather(1, order)
+        if sort_by_azimuth:
+            order = transformed_az.argsort(dim=1)
+            transformed_az = transformed_az.gather(1, order)
+            transformed_el = transformed_el.gather(1, order)
         return torch.stack((transformed_az, transformed_el), dim=-1)
 
     def transformed_points_deg(
@@ -157,10 +156,39 @@ class TorchAzElMask2D:
         *,
         pitch_deg: Tensor,
         roll_deg: Tensor,
+        sort_by_azimuth: bool = True,
     ) -> Tensor:
         pitch_deg, roll_deg = _coerce_pitch_roll(pitch=pitch_deg, roll=roll_deg)
         return torch.rad2deg(
             self.transformed_points_rad(
+                pitch_rad=torch.deg2rad(pitch_deg),
+                roll_rad=torch.deg2rad(roll_deg),
+                sort_by_azimuth=sort_by_azimuth,
+            )
+        )
+
+    def polygon_points_rad(
+        self,
+        *,
+        pitch_rad: Tensor,
+        roll_rad: Tensor,
+    ) -> Tensor:
+        points = self.transformed_points_rad(
+            pitch_rad=pitch_rad,
+            roll_rad=roll_rad,
+            sort_by_azimuth=False,
+        )
+        return torch.cat([points, points[:, :1, :]], dim=1)
+
+    def polygon_points_deg(
+        self,
+        *,
+        pitch_deg: Tensor,
+        roll_deg: Tensor,
+    ) -> Tensor:
+        pitch_deg, roll_deg = _coerce_pitch_roll(pitch=pitch_deg, roll=roll_deg)
+        return torch.rad2deg(
+            self.polygon_points_rad(
                 pitch_rad=torch.deg2rad(pitch_deg),
                 roll_rad=torch.deg2rad(roll_deg),
             )
@@ -173,44 +201,10 @@ class TorchAzElMask2D:
         pitch_rad: Tensor,
         roll_rad: Tensor,
     ) -> Tensor:
-        azimuth_rad = _validate_column_tensor(azimuth_rad, name="azimuth")
-        pitch_rad, roll_rad = _coerce_pitch_roll(pitch=pitch_rad, roll=roll_rad)
-        if azimuth_rad.shape != pitch_rad.shape:
-            raise ValueError("azimuth, pitch, and roll must all have the same shape (n, 1)")
-        if azimuth_rad.device != pitch_rad.device:
-            raise ValueError("azimuth, pitch, and roll must all be on the same device")
-
-        dtype = torch.promote_types(azimuth_rad.dtype, pitch_rad.dtype)
-        if not torch.is_floating_point(torch.empty((), dtype=dtype)):
-            dtype = torch.get_default_dtype()
-
-        azimuth_rad = azimuth_rad.to(dtype=dtype)
-        pitch_rad = pitch_rad.to(dtype=dtype)
-        roll_rad = roll_rad.to(dtype=dtype)
-
-        transformed_points = self.transformed_points_rad(pitch_rad=pitch_rad, roll_rad=roll_rad)
-        point_az = transformed_points[..., 0]
-        point_el = transformed_points[..., 1]
-
-        outside = (azimuth_rad < point_az[:, :1]) | (azimuth_rad > point_az[:, -1:])
-
-        indices = torch.searchsorted(point_az.contiguous(), azimuth_rad.contiguous(), right=False)
-        indices = indices.clamp(min=1, max=point_az.shape[1] - 1)
-
-        left_indices = indices - 1
-        right_indices = indices
-
-        az0 = point_az.gather(1, left_indices)
-        az1 = point_az.gather(1, right_indices)
-        el0 = point_el.gather(1, left_indices)
-        el1 = point_el.gather(1, right_indices)
-
-        delta = az1 - az0
-        weight = torch.where(delta.abs() > 0.0, (azimuth_rad - az0) / delta, torch.zeros_like(azimuth_rad))
-        boundary = el0 + weight * (el1 - el0)
-
-        nan_value = torch.full_like(boundary, torch.nan)
-        return torch.where(outside, nan_value, boundary)
+        raise NotImplementedError(
+            "Closed polygon 2D masks do not define a single boundary elevation. "
+            "Use is_occluded_deg or polygon_points_* instead."
+        )
 
     def boundary_elevation_deg(
         self,
@@ -219,12 +213,9 @@ class TorchAzElMask2D:
         pitch_deg: Tensor,
         roll_deg: Tensor,
     ) -> Tensor:
-        return torch.rad2deg(
-            self.boundary_elevation_rad(
-                torch.deg2rad(_validate_column_tensor(azimuth_deg, name="azimuth")),
-                pitch_rad=torch.deg2rad(_validate_column_tensor(pitch_deg, name="pitch")),
-                roll_rad=torch.deg2rad(_validate_column_tensor(roll_deg, name="roll")),
-            )
+        raise NotImplementedError(
+            "Closed polygon 2D masks do not define a single boundary elevation. "
+            "Use is_occluded_deg or polygon_points_* instead."
         )
 
     def is_occluded_deg(
@@ -242,16 +233,45 @@ class TorchAzElMask2D:
             pitch=pitch_deg,
             roll=roll_deg,
         )
-        boundary = self.boundary_elevation_deg(
-            azimuth_deg,
+        polygon = self.polygon_points_deg(
             pitch_deg=pitch_deg,
             roll_deg=roll_deg,
         )
-        inside_span = ~torch.isnan(boundary)
-        tolerance = torch.full_like(boundary, tolerance_deg)
-        if self.occluded_if == "el_ge_boundary":
-            return inside_span & (elevation_deg >= boundary - tolerance)
-        return inside_span & (elevation_deg <= boundary + tolerance)
+        start_points = polygon[:, :-1, :]
+        end_points = polygon[:, 1:, :]
+
+        x1 = start_points[..., 0]
+        y1 = start_points[..., 1]
+        x2 = end_points[..., 0]
+        y2 = end_points[..., 1]
+
+        query_azimuth = azimuth_deg.expand(-1, x1.shape[1])
+        query_elevation = elevation_deg.expand(-1, y1.shape[1])
+        tolerance = torch.full_like(query_azimuth, tolerance_deg)
+
+        cross = (query_azimuth - x1) * (y2 - y1) - (query_elevation - y1) * (x2 - x1)
+        on_segment = (
+            cross.abs() <= tolerance
+        ) & (
+            query_azimuth >= torch.minimum(x1, x2) - tolerance
+        ) & (
+            query_azimuth <= torch.maximum(x1, x2) + tolerance
+        ) & (
+            query_elevation >= torch.minimum(y1, y2) - tolerance
+        ) & (
+            query_elevation <= torch.maximum(y1, y2) + tolerance
+        )
+
+        straddles = (y1 > query_elevation) != (y2 > query_elevation)
+        denominator = y2 - y1
+        x_intersection = torch.where(
+            denominator.abs() > 0.0,
+            x1 + (query_elevation - y1) * (x2 - x1) / denominator,
+            torch.full_like(x1, torch.inf),
+        )
+        crossings = straddles & (x_intersection >= query_azimuth - tolerance)
+        inside = (crossings.sum(dim=1, keepdim=True) % 2) == 1
+        return on_segment.any(dim=1, keepdim=True) | inside
 
     def render_ascii_deg(
         self,
@@ -276,6 +296,7 @@ class TorchAzElMask2D:
         points = self.transformed_points_deg(
             pitch_deg=pitch_tensor,
             roll_deg=roll_tensor,
+            sort_by_azimuth=False,
         )[0]
 
         az_points = points[:, 0]
@@ -325,9 +346,8 @@ class TorchAzElMask2D:
         if az_min <= 0.0 <= az_max and el_min <= 0.0 <= el_max:
             grid[to_row(0.0)][to_col(0.0)] = "+"
 
-        for index in range(points.shape[0] - 1):
-            start = points[index]
-            end = points[index + 1]
+        polygon_points = torch.cat([points, points[:1]], dim=0)
+        for start, end in zip(polygon_points[:-1], polygon_points[1:], strict=True):
             start_col = to_col(float(start[0].item()))
             start_row = to_row(float(start[1].item()))
             end_col = to_col(float(end[0].item()))

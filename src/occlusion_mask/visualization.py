@@ -181,26 +181,18 @@ def make_visibility_figure(
 
 
 def _az_el_mask_fill_trace(
-    points_az_el_deg: NDArray[np.float64],
+    polygon_points_deg: NDArray[np.float64],
     *,
-    occluded_if: str,
-    el_limits_deg: tuple[float, float],
+    name: str,
 ) -> go.Scatter:
-    if occluded_if == "el_ge_boundary":
-        polygon_x = [float(points_az_el_deg[0, 0]), float(points_az_el_deg[-1, 0]), *points_az_el_deg[::-1, 0].tolist()]
-        polygon_y = [el_limits_deg[1], el_limits_deg[1], *points_az_el_deg[::-1, 1].tolist()]
-    else:
-        polygon_x = [float(points_az_el_deg[0, 0]), float(points_az_el_deg[-1, 0]), *points_az_el_deg[::-1, 0].tolist()]
-        polygon_y = [el_limits_deg[0], el_limits_deg[0], *points_az_el_deg[::-1, 1].tolist()]
-
     return go.Scatter(
-        x=polygon_x,
-        y=polygon_y,
+        x=polygon_points_deg[:, 0],
+        y=polygon_points_deg[:, 1],
         mode="lines",
         line={"width": 0},
         fill="toself",
         fillcolor="rgba(228, 87, 86, 0.18)",
-        name="occluded region",
+        name=name,
         hoverinfo="skip",
     )
 
@@ -217,13 +209,19 @@ def make_az_el_mask_figure(
     """Render a 2D azimuth/elevation view of the simplified mask."""
 
     nominal_points = mask.points_az_el_deg
-    transformed_points = mask.transformed_points_deg(pitch_deg=pitch_deg, roll_deg=roll_deg)
+    nominal_polygon = np.vstack([nominal_points, nominal_points[:1]])
+    transformed_points = mask.transformed_points_deg(
+        pitch_deg=pitch_deg,
+        roll_deg=roll_deg,
+        sort_by_azimuth=False,
+    )
+    transformed_polygon = np.vstack([transformed_points, transformed_points[:1]])
 
     traces: list[go.BaseTraceType] = []
     traces.append(
         go.Scatter(
-            x=nominal_points[:, 0],
-            y=nominal_points[:, 1],
+            x=nominal_polygon[:, 0],
+            y=nominal_polygon[:, 1],
             mode="lines+markers",
             line={"color": "#99785b", "width": 2, "dash": "dash"},
             marker={"size": 6, "color": "#99785b"},
@@ -233,15 +231,14 @@ def make_az_el_mask_figure(
     )
     traces.append(
         _az_el_mask_fill_trace(
-            transformed_points,
-            occluded_if=mask.occluded_if,
-            el_limits_deg=el_limits_deg,
+            transformed_polygon,
+            name="occluded polygon",
         )
     )
     traces.append(
         go.Scatter(
-            x=transformed_points[:, 0],
-            y=transformed_points[:, 1],
+            x=transformed_polygon[:, 0],
+            y=transformed_polygon[:, 1],
             mode="lines+markers",
             line={"color": "#c73b2f", "width": 4},
             marker={"size": 8, "color": "#c73b2f"},
@@ -258,26 +255,12 @@ def make_az_el_mask_figure(
             pitch_deg=pitch_deg,
             roll_deg=roll_deg,
         )
-        boundary_elevation_deg = mask.boundary_elevation_deg(
-            query_azimuth_deg,
-            pitch_deg=pitch_deg,
-            roll_deg=roll_deg,
-        )
         query_color = "#e45756" if occluded else "#54a24b"
-        if boundary_elevation_deg is None:
-            hover_text = (
-                f"az={query_azimuth_deg:+.1f} deg"
-                f"<br>el={query_elevation_deg:+.1f} deg"
-                "<br>boundary=outside mask span"
-                f"<br>occluded={occluded}"
-            )
-        else:
-            hover_text = (
-                f"az={query_azimuth_deg:+.1f} deg"
-                f"<br>el={query_elevation_deg:+.1f} deg"
-                f"<br>boundary={boundary_elevation_deg:+.1f} deg"
-                f"<br>occluded={occluded}"
-            )
+        hover_text = (
+            f"az={query_azimuth_deg:+.1f} deg"
+            f"<br>el={query_elevation_deg:+.1f} deg"
+            f"<br>inside_polygon={occluded}"
+        )
         traces.append(
             go.Scatter(
                 x=[query_azimuth_deg],
