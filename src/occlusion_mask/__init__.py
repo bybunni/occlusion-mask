@@ -16,6 +16,7 @@ from .geometry import (
     transform_sensor_to_body,
     transform_world_to_sensor,
 )
+from .torch_geometry import TorchAzElMask2D
 from .visualization import make_az_el_mask_figure, make_visibility_figure
 
 __all__ = [
@@ -32,6 +33,7 @@ __all__ = [
     "make_visibility_figure",
     "ray_from_sensor_angles",
     "sensor_from_world_rotation",
+    "TorchAzElMask2D",
     "transform_body_to_sensor",
     "transform_sensor_to_body",
     "transform_world_to_sensor",
