@@ -84,7 +84,10 @@ def _coerce_single_value(value: float | Tensor, *, name: str, like: Tensor) -> T
 
 @dataclass(frozen=True)
 class TorchAzElMask2D:
-    """Torch-native 2D occlusion mask in sensor azimuth/elevation space."""
+    """Torch-native 2D occlusion mask in sensor azimuth/elevation space.
+
+    Positive body roll rotates the piecewise mask clockwise in the az/el plane.
+    """
 
     points_az_el_rad: Tensor
     occluded_if: str = "el_ge_boundary"
@@ -141,8 +144,8 @@ class TorchAzElMask2D:
         cos_roll = torch.cos(roll_rad)
         sin_roll = torch.sin(roll_rad)
 
-        transformed_az = cos_roll * mask_az - sin_roll * mask_el
-        transformed_el = sin_roll * mask_az + cos_roll * mask_el + pitch_rad
+        transformed_az = cos_roll * mask_az + sin_roll * mask_el
+        transformed_el = -sin_roll * mask_az + cos_roll * mask_el + pitch_rad
 
         order = transformed_az.argsort(dim=1)
         transformed_az = transformed_az.gather(1, order)

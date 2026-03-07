@@ -181,7 +181,7 @@ def make_app() -> Dash:
                         style={"margin": "0", "fontSize": "2rem", "fontWeight": "700"},
                     ),
                     html.P(
-                        "This simplified sensor-frame approximation keeps the occlusion mask piecewise-linear in azimuth/elevation space. Platform roll rotates the mask, and platform pitch translates it vertically.",
+                        "This simplified sensor-frame approximation keeps the occlusion mask piecewise-linear in azimuth/elevation space. Positive platform roll rotates the mask clockwise, and platform pitch translates it vertically.",
                         style={"margin": "0", "maxWidth": "72ch", "lineHeight": "1.5"},
                     ),
                 ],

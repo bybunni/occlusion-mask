@@ -177,7 +177,8 @@ class AzElMask2D:
     The base mask is authored as a piecewise-linear curve in sensor azimuth and
     elevation. The simplified platform motion model applies:
 
-    - roll: a planar rotation of the curve in az/el space
+    - roll: a clockwise planar rotation of the curve in az/el space for
+      positive body roll
     - pitch: a vertical translation of the curve in elevation
     """
 
@@ -220,8 +221,8 @@ class AzElMask2D:
     ) -> NDArray[np.float64]:
         rotation = np.array(
             [
-                [cos(roll_rad), -sin(roll_rad)],
-                [sin(roll_rad), cos(roll_rad)],
+                [cos(roll_rad), sin(roll_rad)],
+                [-sin(roll_rad), cos(roll_rad)],
             ],
             dtype=float,
         )

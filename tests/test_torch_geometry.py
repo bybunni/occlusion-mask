@@ -87,7 +87,7 @@ def test_torch_mask_pitch_translates_boundary() -> None:
     assert isclose(float(boundary.item()), 15.0, rel_tol=1e-6, abs_tol=1e-6)
 
 
-def test_torch_mask_positive_roll_rotates_right_side_up() -> None:
+def test_torch_mask_positive_roll_rotates_right_side_down() -> None:
     flat_mask = TorchAzElMask2D.from_degrees(
         [
             (-40.0, 0.0),
@@ -103,8 +103,8 @@ def test_torch_mask_positive_roll_rotates_right_side_up() -> None:
     )
 
     assert transformed.shape == (1, 5, 2)
-    assert float(transformed[0, 0, 1]) < 0.0
-    assert float(transformed[0, -1, 1]) > 0.0
+    assert float(transformed[0, 0, 1]) > 0.0
+    assert float(transformed[0, -1, 1]) < 0.0
 
 
 def test_torch_mask_returns_bool_column_tensor() -> None:

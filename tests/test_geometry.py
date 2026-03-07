@@ -124,7 +124,7 @@ def test_2d_mask_pitch_translates_boundary() -> None:
     assert isclose(boundary_shifted, 15.0)
 
 
-def test_2d_mask_positive_roll_rotates_right_side_up() -> None:
+def test_2d_mask_positive_roll_rotates_right_side_down() -> None:
     flat_mask = AzElMask2D.from_degrees(
         [
             (-40.0, 0.0),
@@ -137,8 +137,8 @@ def test_2d_mask_positive_roll_rotates_right_side_up() -> None:
 
     transformed = flat_mask.transformed_points_deg(roll_deg=10.0)
 
-    assert transformed[0, 1] < 0.0
-    assert transformed[-1, 1] > 0.0
+    assert transformed[0, 1] > 0.0
+    assert transformed[-1, 1] < 0.0
 
 
 def test_2d_mask_occlusion_high_side() -> None:
