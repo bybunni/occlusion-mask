@@ -44,6 +44,23 @@ def test_build_figure_reflects_platform_pitch_roll_and_query() -> None:
     assert "query el +9.0 deg" in figure.layout.title.text
 
 
+def test_build_figure_pitch_shift_follows_rolled_local_axis() -> None:
+    mask = MODULE.build_mask(MODULE.DEFAULT_MASK_POINTS)
+    nominal = mask.transformed_points_deg(
+        pitch_deg=0.0,
+        roll_deg=30.0,
+        sort_by_azimuth=False,
+    )
+    shifted = mask.transformed_points_deg(
+        pitch_deg=10.0,
+        roll_deg=30.0,
+        sort_by_azimuth=False,
+    )
+
+    assert shifted[2, 0] - nominal[2, 0] == pytest.approx(5.0)
+    assert shifted[2, 1] - nominal[2, 1] == pytest.approx(10.0 * 0.8660254037844386)
+
+
 def test_build_figure_labels_original_points_even_when_sorted_boundary_reorders() -> None:
     mask_points = [
         (-40.0, 0.0),

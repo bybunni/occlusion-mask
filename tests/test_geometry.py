@@ -124,6 +124,17 @@ def test_2d_mask_pitch_translates_polygon_points() -> None:
     assert isclose(shifted[2, 1], 15.0)
 
 
+def test_2d_mask_pitch_follows_rolled_local_axis() -> None:
+    mask = make_mask_2d()
+
+    nominal = mask.transformed_points_deg(pitch_deg=0.0, roll_deg=30.0, sort_by_azimuth=False)
+    shifted = mask.transformed_points_deg(pitch_deg=10.0, roll_deg=30.0, sort_by_azimuth=False)
+    delta = shifted[2] - nominal[2]
+
+    assert isclose(delta[0], 5.0, rel_tol=1e-6, abs_tol=1e-6)
+    assert isclose(delta[1], 10.0 * np.cos(np.deg2rad(30.0)), rel_tol=1e-6, abs_tol=1e-6)
+
+
 def test_2d_mask_positive_roll_rotates_right_side_down() -> None:
     flat_mask = AzElMask2D.from_degrees(
         [

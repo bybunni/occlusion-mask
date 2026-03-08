@@ -225,8 +225,9 @@ class AzElMask2D:
             ],
             dtype=float,
         )
-        transformed = (rotation @ self.points_az_el_rad.T).T
-        transformed[:, 1] += pitch_rad
+        translated = self.points_az_el_rad.copy()
+        translated[:, 1] += pitch_rad
+        transformed = (rotation @ translated.T).T
         if sort_by_azimuth:
             return transformed[np.argsort(transformed[:, 0])]
         return transformed

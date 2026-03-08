@@ -88,6 +88,24 @@ def test_torch_mask_pitch_translates_polygon_points() -> None:
     assert isclose(float(transformed[0, 2, 1]), 15.0, rel_tol=1e-6, abs_tol=1e-6)
 
 
+def test_torch_mask_pitch_follows_rolled_local_axis() -> None:
+    mask = make_torch_mask()
+    nominal = mask.transformed_points_deg(
+        pitch_deg=column([0.0]),
+        roll_deg=column([30.0]),
+        sort_by_azimuth=False,
+    )
+    shifted = mask.transformed_points_deg(
+        pitch_deg=column([10.0]),
+        roll_deg=column([30.0]),
+        sort_by_azimuth=False,
+    )
+    delta = shifted[0, 2] - nominal[0, 2]
+
+    assert isclose(float(delta[0]), 5.0, rel_tol=1e-6, abs_tol=1e-6)
+    assert isclose(float(delta[1]), 10.0 * torch.cos(torch.deg2rad(torch.tensor(30.0))).item(), rel_tol=1e-6, abs_tol=1e-6)
+
+
 def test_torch_mask_positive_roll_rotates_right_side_down() -> None:
     flat_mask = TorchAzElMask2D.from_degrees(
         [

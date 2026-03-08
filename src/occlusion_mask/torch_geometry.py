@@ -79,13 +79,13 @@ class TorchAzElMask2D:
         mask_points = self.points_az_el_rad.to(device=pitch_rad.device, dtype=dtype)
 
         mask_az = mask_points[:, 0].unsqueeze(0)
-        mask_el = mask_points[:, 1].unsqueeze(0)
+        mask_el = mask_points[:, 1].unsqueeze(0) + pitch_rad
 
         cos_roll = torch.cos(roll_rad)
         sin_roll = torch.sin(roll_rad)
 
         transformed_az = cos_roll * mask_az + sin_roll * mask_el
-        transformed_el = -sin_roll * mask_az + cos_roll * mask_el + pitch_rad
+        transformed_el = -sin_roll * mask_az + cos_roll * mask_el
 
         if sort_by_azimuth:
             order = transformed_az.argsort(dim=1)
