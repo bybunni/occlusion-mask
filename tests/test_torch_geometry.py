@@ -32,7 +32,7 @@ def make_torch_mask(occluded_if: str = "el_ge_boundary") -> TorchAzElMask2D:
     )
 
 
-def column(values: list[float], dtype: torch.dtype = torch.float64) -> torch.Tensor:
+def column(values: list[float], dtype: torch.dtype = torch.float32) -> torch.Tensor:
     return torch.tensor(values, dtype=dtype).unsqueeze(1)
 
 
@@ -208,9 +208,33 @@ def test_torch_mask_matches_numpy_row_by_row() -> None:
     assert torch_result.tolist() == expected
 
 
-def test_torch_mask_requires_floating_query_tensors() -> None:
+def test_torch_mask_rejects_non_float32_constructor_tensors() -> None:
+    with pytest.raises(AssertionError, match="torch.float32"):
+        TorchAzElMask2D.from_degrees(
+            torch.tensor(
+                [
+                    [-40.0, 16.0],
+                    [-20.0, 13.0],
+                    [0.0, 10.0],
+                    [20.0, 13.0],
+                    [40.0, 16.0],
+                ],
+                dtype=torch.float64,
+            )
+        )
+
+
+def test_torch_mask_requires_float32_query_tensors() -> None:
     mask = make_torch_mask()
-    with pytest.raises(AssertionError, match="floating point"):
+    with pytest.raises(AssertionError, match="torch.float32"):
+        mask.is_occluded_deg(
+            column([0.0], dtype=torch.float64),
+            column([12.0]),
+            column([0.0]),
+            column([0.0]),
+        )
+
+    with pytest.raises(AssertionError, match="torch.float32"):
         mask.is_occluded_deg(
             torch.tensor([[0]], dtype=torch.int64),
             column([12.0]),
@@ -287,5 +311,14 @@ def test_torch_mask_ascii_render_requires_single_state() -> None:
     with pytest.raises(AssertionError, match="single-value tensor"):
         mask.render_ascii_deg(
             pitch_deg=column([0.0, 1.0]),
+            roll_deg=0.0,
+        )
+
+
+def test_torch_mask_ascii_render_requires_float32_tensor_scalars() -> None:
+    mask = make_torch_mask()
+    with pytest.raises(AssertionError, match="torch.float32"):
+        mask.render_ascii_deg(
+            pitch_deg=torch.tensor([[0.0]], dtype=torch.float64),
             roll_deg=0.0,
         )
