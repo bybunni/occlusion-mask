@@ -18,6 +18,7 @@ INITIAL_PITCH_DEG = 2.0
 INITIAL_ROLL_DEG = 0.0
 INITIAL_QUERY_AZ_DEG = 5.0
 INITIAL_QUERY_EL_DEG = 9.0
+DEFAULT_SENSOR_VOLUME_DEG = (-35.0, 35.0, -10.0, 20.0)
 
 
 def build_mask(mask_points: list[tuple[float, float]] | tuple[tuple[float, float], ...] | None = None) -> AzElMask2D:
@@ -123,6 +124,7 @@ def build_figure(
     roll_deg: float,
     query_az_deg: float,
     query_el_deg: float,
+    sensor_volume_deg: tuple[float, float, float, float] = DEFAULT_SENSOR_VOLUME_DEG,
     mask_points: list[tuple[float, float]] | tuple[tuple[float, float], ...] | None = None,
 ):
     active_mask_points = DEFAULT_MASK_POINTS if mask_points is None else list(mask_points)
@@ -132,6 +134,7 @@ def build_figure(
         pitch_deg=pitch_deg,
         roll_deg=roll_deg,
         query_point_deg=(query_az_deg, query_el_deg),
+        sensor_volume_deg=sensor_volume_deg,
         az_limits_deg=(-55.0, 55.0),
         el_limits_deg=(-25.0, 30.0),
     )
@@ -249,6 +252,111 @@ def point_input(*, point_label: str, field_label: str, field_key: str, value: fl
             ),
         ],
         style={"display": "grid", "gap": "0.35rem"},
+    )
+
+
+def volume_input(*, input_id: str, label: str, value: float, step: float) -> html.Div:
+    return html.Div(
+        [
+            html.Label(
+                label,
+                htmlFor=input_id,
+                style={"fontSize": "0.78rem", "fontWeight": "700", "letterSpacing": "0.03em"},
+            ),
+            dcc.Input(
+                id=input_id,
+                type="number",
+                value=value,
+                step=step,
+                debounce=False,
+                inputMode="numeric",
+                style={
+                    "width": "100%",
+                    "padding": "0.65rem 0.75rem",
+                    "border": "1px solid #b9d4bc",
+                    "borderRadius": "12px",
+                    "backgroundColor": "#f8fff7",
+                    "fontSize": "0.95rem",
+                    "color": "#13212b",
+                },
+            ),
+        ],
+        style={"display": "grid", "gap": "0.35rem"},
+    )
+
+
+def sensor_volume_from_values(
+    az_min_deg: float | None,
+    az_max_deg: float | None,
+    el_min_deg: float | None,
+    el_max_deg: float | None,
+) -> tuple[float, float, float, float]:
+    if az_min_deg is None or az_max_deg is None or el_min_deg is None or el_max_deg is None:
+        raise ValueError("Sensor volume needs all four azimuth/elevation limits")
+
+    normalized = (
+        float(az_min_deg),
+        float(az_max_deg),
+        float(el_min_deg),
+        float(el_max_deg),
+    )
+    if normalized[0] >= normalized[1]:
+        raise ValueError("Sensor volume azimuth min must be less than azimuth max")
+    if normalized[2] >= normalized[3]:
+        raise ValueError("Sensor volume elevation min must be less than elevation max")
+    return normalized
+
+
+def sensor_volume_editor() -> html.Div:
+    az_min_deg, az_max_deg, el_min_deg, el_max_deg = DEFAULT_SENSOR_VOLUME_DEG
+    return html.Div(
+        [
+            html.Div(
+                [
+                    html.H2(
+                        "Sensor Volume Box",
+                        style={"margin": "0", "fontSize": "1.2rem", "fontWeight": "700"},
+                    ),
+                    html.P(
+                        "Edit the green sensor-volume rectangle directly in azimuth/elevation space using min and max bounds.",
+                        style={"margin": "0", "lineHeight": "1.5", "color": "#33434d"},
+                    ),
+                ],
+                style={"display": "grid", "gap": "0.35rem"},
+            ),
+            html.Div(
+                [
+                    volume_input(input_id="sensor-volume-az-min", label="Azimuth Min (deg)", value=az_min_deg, step=1.0),
+                    volume_input(input_id="sensor-volume-az-max", label="Azimuth Max (deg)", value=az_max_deg, step=1.0),
+                    volume_input(input_id="sensor-volume-el-min", label="Elevation Min (deg)", value=el_min_deg, step=0.5),
+                    volume_input(input_id="sensor-volume-el-max", label="Elevation Max (deg)", value=el_max_deg, step=0.5),
+                ],
+                style={
+                    "display": "grid",
+                    "gridTemplateColumns": "repeat(auto-fit, minmax(220px, 1fr))",
+                    "gap": "1rem",
+                },
+            ),
+            html.Div(
+                id="sensor-volume-editor-status",
+                children="Sensor volume accepted. Edit the limits to reshape the green rectangle.",
+                style={
+                    "minHeight": "1.5rem",
+                    "fontSize": "0.92rem",
+                    "fontWeight": "600",
+                    "color": "#2a5e37",
+                },
+            ),
+        ],
+        style={
+            "display": "grid",
+            "gap": "1rem",
+            "padding": "1.25rem",
+            "border": "1px solid #b9d4bc",
+            "borderRadius": "18px",
+            "background": "linear-gradient(180deg, #f7fff5 0%, #e2f0df 100%)",
+            "boxShadow": "0 18px 40px rgba(19, 33, 43, 0.08)",
+        },
     )
 
 
@@ -397,7 +505,7 @@ def make_app() -> Dash:
                         style={"margin": "0", "fontSize": "2rem", "fontWeight": "700"},
                     ),
                     html.P(
-                        "This simplified sensor-frame approximation keeps the occlusion mask as a closed A-B-C-D-E-A polygon in azimuth/elevation space. Positive platform roll rotates the polygon clockwise, and platform pitch translates it vertically.",
+                        "This simplified sensor-frame approximation keeps the occlusion mask as a closed A-B-C-D-E-A polygon in azimuth/elevation space. Positive platform roll rotates the polygon clockwise, platform pitch moves it along the rolled local axis, and the green rectangle shows the sensor volume box.",
                         style={"margin": "0", "maxWidth": "72ch", "lineHeight": "1.5"},
                     ),
                 ],
@@ -458,6 +566,7 @@ def make_app() -> Dash:
                     "boxShadow": "0 18px 40px rgba(19, 33, 43, 0.08)",
                 },
             ),
+            sensor_volume_editor(),
             mask_editor(),
             html.Div(
                 [
@@ -500,10 +609,15 @@ def make_app() -> Dash:
         Output("mask-2d-summary", "children"),
         Output("mask-2d-editor-status", "children"),
         Output("mask-2d-current-values", "children"),
+        Output("sensor-volume-editor-status", "children"),
         Input("pitch-slider", "value"),
         Input("roll-slider", "value"),
         Input("query-az-slider", "value"),
         Input("query-el-slider", "value"),
+        Input("sensor-volume-az-min", "value"),
+        Input("sensor-volume-az-max", "value"),
+        Input("sensor-volume-el-min", "value"),
+        Input("sensor-volume-el-max", "value"),
         Input({"type": "mask-az", "index": ALL}, "value"),
         Input({"type": "mask-el", "index": ALL}, "value"),
     )
@@ -512,6 +626,10 @@ def make_app() -> Dash:
         roll_deg: float,
         query_az_deg: float,
         query_el_deg: float,
+        sensor_volume_az_min_deg: float | None,
+        sensor_volume_az_max_deg: float | None,
+        sensor_volume_el_min_deg: float | None,
+        sensor_volume_el_max_deg: float | None,
         azimuth_values: list[float | None],
         elevation_values: list[float | None],
     ):
@@ -529,6 +647,17 @@ def make_app() -> Dash:
             )
             for index, (azimuth_deg, elevation_deg) in enumerate(mask_points)
         ]
+        try:
+            normalized_sensor_volume = sensor_volume_from_values(
+                sensor_volume_az_min_deg,
+                sensor_volume_az_max_deg,
+                sensor_volume_el_min_deg,
+                sensor_volume_el_max_deg,
+            )
+            sensor_volume_status = "Sensor volume accepted. The green rectangle uses the edited limits."
+        except ValueError as exc:
+            normalized_sensor_volume = DEFAULT_SENSOR_VOLUME_DEG
+            sensor_volume_status = f"Sensor volume update skipped: {exc}"
 
         try:
             normalized_mask_points = mask_points_from_lists(azimuth_values, elevation_values)
@@ -538,6 +667,7 @@ def make_app() -> Dash:
                 roll_deg=roll_deg,
                 query_az_deg=query_az_deg,
                 query_el_deg=query_el_deg,
+                sensor_volume_deg=normalized_sensor_volume,
                 mask_points=normalized_mask_points,
             )
         except ValueError as exc:
@@ -547,6 +677,7 @@ def make_app() -> Dash:
                     roll_deg=roll_deg,
                     query_az_deg=query_az_deg,
                     query_el_deg=query_el_deg,
+                    sensor_volume_deg=normalized_sensor_volume,
                 ),
                 status_panel(
                     MASK_2D,
@@ -562,6 +693,7 @@ def make_app() -> Dash:
                 ),
                 f"Mask update skipped: {exc}",
                 current_mask_summary(summary_points),
+                sensor_volume_status,
             )
 
         return (
@@ -580,6 +712,7 @@ def make_app() -> Dash:
             ),
             "Mask accepted. Positive platform roll still rotates the edited polygon clockwise.",
             current_mask_summary(normalized_mask_points),
+            sensor_volume_status,
         )
 
     return app

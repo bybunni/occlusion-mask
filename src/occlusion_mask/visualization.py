@@ -197,12 +197,39 @@ def _az_el_mask_fill_trace(
     )
 
 
+def _sensor_volume_trace(
+    sensor_volume_deg: tuple[float, float, float, float],
+) -> go.Scatter:
+    az_min_deg, az_max_deg, el_min_deg, el_max_deg = sensor_volume_deg
+    rectangle = np.array(
+        [
+            [az_min_deg, el_min_deg],
+            [az_max_deg, el_min_deg],
+            [az_max_deg, el_max_deg],
+            [az_min_deg, el_max_deg],
+            [az_min_deg, el_min_deg],
+        ],
+        dtype=float,
+    )
+    return go.Scatter(
+        x=rectangle[:, 0],
+        y=rectangle[:, 1],
+        mode="lines",
+        line={"color": "#3f9b59", "width": 3},
+        fill="toself",
+        fillcolor="rgba(84, 162, 75, 0.12)",
+        name="sensor volume",
+        hoverinfo="skip",
+    )
+
+
 def make_az_el_mask_figure(
     mask: AzElMask2D,
     *,
     pitch_deg: float = 0.0,
     roll_deg: float = 0.0,
     query_point_deg: tuple[float, float] | None = None,
+    sensor_volume_deg: tuple[float, float, float, float] | None = None,
     az_limits_deg: tuple[float, float] = (-50.0, 50.0),
     el_limits_deg: tuple[float, float] = (-25.0, 25.0),
 ) -> go.Figure:
@@ -218,6 +245,8 @@ def make_az_el_mask_figure(
     transformed_polygon = np.vstack([transformed_points, transformed_points[:1]])
 
     traces: list[go.BaseTraceType] = []
+    if sensor_volume_deg is not None:
+        traces.append(_sensor_volume_trace(sensor_volume_deg))
     traces.append(
         go.Scatter(
             x=nominal_polygon[:, 0],

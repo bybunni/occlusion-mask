@@ -44,6 +44,21 @@ def test_build_figure_reflects_platform_pitch_roll_and_query() -> None:
     assert "query el +9.0 deg" in figure.layout.title.text
 
 
+def test_build_figure_includes_sensor_volume_trace() -> None:
+    sensor_volume = (-30.0, 25.0, -12.0, 18.0)
+    figure = MODULE.build_figure(
+        pitch_deg=0.0,
+        roll_deg=0.0,
+        query_az_deg=0.0,
+        query_el_deg=0.0,
+        sensor_volume_deg=sensor_volume,
+    )
+
+    sensor_trace = next(trace for trace in figure.data if trace.name == "sensor volume")
+    assert list(sensor_trace.x) == [-30.0, 25.0, 25.0, -30.0, -30.0]
+    assert list(sensor_trace.y) == [-12.0, -12.0, 18.0, 18.0, -12.0]
+
+
 def test_build_figure_pitch_shift_follows_rolled_local_axis() -> None:
     mask = MODULE.build_mask(MODULE.DEFAULT_MASK_POINTS)
     nominal = mask.transformed_points_deg(
@@ -114,6 +129,11 @@ def test_make_app_includes_mask_point_inputs() -> None:
     app = MODULE.make_app()
     all_ids = _collect_ids(app.layout)
 
+    assert "sensor-volume-az-min" in all_ids
+    assert "sensor-volume-az-max" in all_ids
+    assert "sensor-volume-el-min" in all_ids
+    assert "sensor-volume-el-max" in all_ids
+
     for point_label in MODULE.POINT_LABELS:
         assert {"type": "mask-az", "index": point_label} in all_ids
         assert {"type": "mask-el", "index": point_label} in all_ids
@@ -127,6 +147,23 @@ def test_mask_points_from_lists_accepts_ordered_points() -> None:
 
     assert points[0] == (-45.0, 18.0)
     assert points[-1] == (42.0, 19.0)
+
+
+def test_sensor_volume_from_values_accepts_ordered_limits() -> None:
+    limits = MODULE.sensor_volume_from_values(-35.0, 30.0, -12.0, 16.0)
+
+    assert limits == (-35.0, 30.0, -12.0, 16.0)
+
+
+def test_sensor_volume_from_values_rejects_missing_or_inverted_limits() -> None:
+    with pytest.raises(ValueError, match="needs all four"):
+        MODULE.sensor_volume_from_values(-35.0, None, -12.0, 16.0)
+
+    with pytest.raises(ValueError, match="azimuth min must be less"):
+        MODULE.sensor_volume_from_values(20.0, 10.0, -12.0, 16.0)
+
+    with pytest.raises(ValueError, match="elevation min must be less"):
+        MODULE.sensor_volume_from_values(-35.0, 30.0, 5.0, 0.0)
 
 
 def test_mask_points_from_lists_rejects_missing_or_unsorted_points() -> None:
