@@ -1,108 +1,39 @@
 """Torch-native geometry helpers for batched azimuth/elevation masking."""
 
-from __future__ import annotations
-
-from dataclasses import dataclass
+from typing import List, Optional, Tuple, Union
 
 import torch
 
-Tensor = torch.Tensor
 
-
-def _validate_points(points_az_el_rad: Tensor, *, name: str) -> Tensor:
-    points = torch.as_tensor(points_az_el_rad)
-    if points.ndim != 2 or points.shape != (5, 2):
-        raise ValueError(f"{name} must have shape (5, 2), got {tuple(points.shape)!r}")
-    if not torch.is_floating_point(points):
-        points = points.to(torch.get_default_dtype())
-    if torch.any(points[1:, 0] <= points[:-1, 0]):
-        raise ValueError("2D mask points must be ordered left-to-right by increasing azimuth")
-    return points
-
-
-def _validate_column_tensor(value: Tensor, *, name: str) -> Tensor:
-    if not isinstance(value, torch.Tensor):
-        raise TypeError(f"{name} must be a torch.Tensor")
-    if value.ndim != 2 or value.shape[1] != 1:
-        raise ValueError(f"{name} must have shape (n, 1), got {tuple(value.shape)!r}")
-    return value
-
-
-def _coerce_query_tensors(*, azimuth: Tensor, elevation: Tensor, pitch: Tensor, roll: Tensor) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-    azimuth = _validate_column_tensor(azimuth, name="azimuth")
-    elevation = _validate_column_tensor(elevation, name="elevation")
-    pitch = _validate_column_tensor(pitch, name="pitch")
-    roll = _validate_column_tensor(roll, name="roll")
-
-    shape = azimuth.shape
-    if elevation.shape != shape or pitch.shape != shape or roll.shape != shape:
-        raise ValueError("azimuth, elevation, pitch, and roll must all have the same shape (n, 1)")
-
-    devices = {tensor.device for tensor in (azimuth, elevation, pitch, roll)}
-    if len(devices) != 1:
-        raise ValueError("azimuth, elevation, pitch, and roll must all be on the same device")
-
-    dtype = azimuth.dtype
-    for tensor in (elevation, pitch, roll):
-        dtype = torch.promote_types(dtype, tensor.dtype)
-    if not torch.is_floating_point(torch.empty((), dtype=dtype)):
-        dtype = torch.get_default_dtype()
-
-    return tuple(tensor.to(dtype=dtype) for tensor in (azimuth, elevation, pitch, roll))
-
-
-def _coerce_pitch_roll(*, pitch: Tensor, roll: Tensor) -> tuple[Tensor, Tensor]:
-    pitch = _validate_column_tensor(pitch, name="pitch")
-    roll = _validate_column_tensor(roll, name="roll")
-    if pitch.shape != roll.shape:
-        raise ValueError("pitch and roll must have the same shape (n, 1)")
-    if pitch.device != roll.device:
-        raise ValueError("pitch and roll must be on the same device")
-
-    dtype = torch.promote_types(pitch.dtype, roll.dtype)
-    if not torch.is_floating_point(torch.empty((), dtype=dtype)):
-        dtype = torch.get_default_dtype()
-
-    return pitch.to(dtype=dtype), roll.to(dtype=dtype)
-
-
-def _coerce_single_value(value: float | Tensor, *, name: str, like: Tensor) -> Tensor:
-    if isinstance(value, torch.Tensor):
-        if value.numel() != 1:
-            raise ValueError(f"{name} must be a float or a single-value tensor")
-        tensor = value.reshape(1, 1).to(device=like.device)
-    else:
-        tensor = torch.tensor([[float(value)]], device=like.device)
-
-    if not torch.is_floating_point(tensor):
-        tensor = tensor.to(dtype=like.dtype)
-    else:
-        tensor = tensor.to(dtype=torch.promote_types(tensor.dtype, like.dtype))
-
-    return tensor
-
-
-@dataclass(frozen=True)
 class TorchAzElMask2D:
     """Torch-native 2D occlusion mask as a closed polygon in sensor az/el space."""
 
-    points_az_el_rad: Tensor
-    occluded_if: str = "el_ge_boundary"
+    def __init__(
+        self,
+        points_az_el_rad: torch.Tensor,
+        occluded_if: str = "el_ge_boundary",
+    ) -> None:
+        if not isinstance(points_az_el_rad, torch.Tensor):
+            raise AssertionError("points_az_el_rad must be a torch.Tensor")
+        if points_az_el_rad.shape != (5, 2):
+            raise AssertionError("points_az_el_rad must have shape (5, 2)")
+        if not torch.is_floating_point(points_az_el_rad):
+            raise AssertionError("points_az_el_rad must be floating point")
+        if torch.any(points_az_el_rad[1:, 0] <= points_az_el_rad[:-1, 0]):
+            raise AssertionError("2D mask points must be ordered left-to-right by increasing azimuth")
+        if occluded_if not in {"el_ge_boundary", "el_le_boundary"}:
+            raise AssertionError("occluded_if must be 'el_ge_boundary' or 'el_le_boundary'")
 
-    def __post_init__(self) -> None:
-        points = _validate_points(self.points_az_el_rad, name="points_az_el_rad")
-        if self.occluded_if not in {"el_ge_boundary", "el_le_boundary"}:
-            raise ValueError("occluded_if must be 'el_ge_boundary' or 'el_le_boundary'")
-        object.__setattr__(self, "points_az_el_rad", points)
+        self.points_az_el_rad = points_az_el_rad
+        self.occluded_if = occluded_if
 
     @classmethod
     def from_degrees(
         cls,
-        points_az_el_deg: Tensor | list[tuple[float, float]] | tuple[tuple[float, float], ...],
-        *,
+        points_az_el_deg: Union[torch.Tensor, List[Tuple[float, float]], Tuple[Tuple[float, float], ...]],
         occluded_if: str = "el_ge_boundary",
-        dtype: torch.dtype | None = None,
-        device: torch.device | str | None = None,
+        dtype: Optional[torch.dtype] = None,
+        device: Optional[Union[torch.device, str]] = None,
     ) -> "TorchAzElMask2D":
         target_dtype = dtype
         if target_dtype is None and not isinstance(points_az_el_deg, torch.Tensor):
@@ -112,30 +43,41 @@ class TorchAzElMask2D:
         if dtype is not None:
             points = points.to(dtype=dtype)
         elif not torch.is_floating_point(points):
-            points = points.to(torch.float32)
+            points = points.to(dtype=torch.float32)
 
-        points = _validate_points(points, name="points_az_el_deg")
         return cls(
             points_az_el_rad=torch.deg2rad(points),
             occluded_if=occluded_if,
         )
 
     @property
-    def points_az_el_deg(self) -> Tensor:
+    def points_az_el_deg(self) -> torch.Tensor:
         return torch.rad2deg(self.points_az_el_rad)
-
-    def _points_like(self, reference: Tensor) -> Tensor:
-        return self.points_az_el_rad.to(device=reference.device, dtype=reference.dtype)
 
     def transformed_points_rad(
         self,
-        *,
-        pitch_rad: Tensor,
-        roll_rad: Tensor,
+        pitch_rad: torch.Tensor,
+        roll_rad: torch.Tensor,
         sort_by_azimuth: bool = True,
-    ) -> Tensor:
-        pitch_rad, roll_rad = _coerce_pitch_roll(pitch=pitch_rad, roll=roll_rad)
-        mask_points = self._points_like(pitch_rad)
+    ) -> torch.Tensor:
+        if not isinstance(pitch_rad, torch.Tensor) or not isinstance(roll_rad, torch.Tensor):
+            raise AssertionError("pitch_rad and roll_rad must be torch.Tensor column vectors")
+        if pitch_rad.ndim != 2 or pitch_rad.shape[1] != 1:
+            raise AssertionError("pitch_rad must have shape (n, 1)")
+        if roll_rad.ndim != 2 or roll_rad.shape[1] != 1:
+            raise AssertionError("roll_rad must have shape (n, 1)")
+        if pitch_rad.shape != roll_rad.shape:
+            raise AssertionError("pitch_rad and roll_rad must have the same shape (n, 1)")
+        if pitch_rad.device != roll_rad.device:
+            raise AssertionError("pitch_rad and roll_rad must be on the same device")
+        if not torch.is_floating_point(pitch_rad) or not torch.is_floating_point(roll_rad):
+            raise AssertionError("pitch_rad and roll_rad must be floating point")
+
+        dtype = torch.promote_types(pitch_rad.dtype, roll_rad.dtype)
+        pitch_rad = pitch_rad.to(dtype=dtype)
+        roll_rad = roll_rad.to(dtype=dtype)
+        mask_points = self.points_az_el_rad.to(device=pitch_rad.device, dtype=dtype)
+
         mask_az = mask_points[:, 0].unsqueeze(0)
         mask_el = mask_points[:, 1].unsqueeze(0)
 
@@ -153,12 +95,23 @@ class TorchAzElMask2D:
 
     def transformed_points_deg(
         self,
-        *,
-        pitch_deg: Tensor,
-        roll_deg: Tensor,
+        pitch_deg: torch.Tensor,
+        roll_deg: torch.Tensor,
         sort_by_azimuth: bool = True,
-    ) -> Tensor:
-        pitch_deg, roll_deg = _coerce_pitch_roll(pitch=pitch_deg, roll=roll_deg)
+    ) -> torch.Tensor:
+        if not isinstance(pitch_deg, torch.Tensor) or not isinstance(roll_deg, torch.Tensor):
+            raise AssertionError("pitch_deg and roll_deg must be torch.Tensor column vectors")
+        if pitch_deg.ndim != 2 or pitch_deg.shape[1] != 1:
+            raise AssertionError("pitch_deg must have shape (n, 1)")
+        if roll_deg.ndim != 2 or roll_deg.shape[1] != 1:
+            raise AssertionError("roll_deg must have shape (n, 1)")
+        if pitch_deg.shape != roll_deg.shape:
+            raise AssertionError("pitch_deg and roll_deg must have the same shape (n, 1)")
+        if pitch_deg.device != roll_deg.device:
+            raise AssertionError("pitch_deg and roll_deg must be on the same device")
+        if not torch.is_floating_point(pitch_deg) or not torch.is_floating_point(roll_deg):
+            raise AssertionError("pitch_deg and roll_deg must be floating point")
+
         return torch.rad2deg(
             self.transformed_points_rad(
                 pitch_rad=torch.deg2rad(pitch_deg),
@@ -169,10 +122,9 @@ class TorchAzElMask2D:
 
     def polygon_points_rad(
         self,
-        *,
-        pitch_rad: Tensor,
-        roll_rad: Tensor,
-    ) -> Tensor:
+        pitch_rad: torch.Tensor,
+        roll_rad: torch.Tensor,
+    ) -> torch.Tensor:
         points = self.transformed_points_rad(
             pitch_rad=pitch_rad,
             roll_rad=roll_rad,
@@ -182,11 +134,22 @@ class TorchAzElMask2D:
 
     def polygon_points_deg(
         self,
-        *,
-        pitch_deg: Tensor,
-        roll_deg: Tensor,
-    ) -> Tensor:
-        pitch_deg, roll_deg = _coerce_pitch_roll(pitch=pitch_deg, roll=roll_deg)
+        pitch_deg: torch.Tensor,
+        roll_deg: torch.Tensor,
+    ) -> torch.Tensor:
+        if not isinstance(pitch_deg, torch.Tensor) or not isinstance(roll_deg, torch.Tensor):
+            raise AssertionError("pitch_deg and roll_deg must be torch.Tensor column vectors")
+        if pitch_deg.ndim != 2 or pitch_deg.shape[1] != 1:
+            raise AssertionError("pitch_deg must have shape (n, 1)")
+        if roll_deg.ndim != 2 or roll_deg.shape[1] != 1:
+            raise AssertionError("roll_deg must have shape (n, 1)")
+        if pitch_deg.shape != roll_deg.shape:
+            raise AssertionError("pitch_deg and roll_deg must have the same shape (n, 1)")
+        if pitch_deg.device != roll_deg.device:
+            raise AssertionError("pitch_deg and roll_deg must be on the same device")
+        if not torch.is_floating_point(pitch_deg) or not torch.is_floating_point(roll_deg):
+            raise AssertionError("pitch_deg and roll_deg must be floating point")
+
         return torch.rad2deg(
             self.polygon_points_rad(
                 pitch_rad=torch.deg2rad(pitch_deg),
@@ -194,45 +157,54 @@ class TorchAzElMask2D:
             )
         )
 
-    def boundary_elevation_rad(
-        self,
-        azimuth_rad: Tensor,
-        *,
-        pitch_rad: Tensor,
-        roll_rad: Tensor,
-    ) -> Tensor:
-        raise NotImplementedError(
-            "Closed polygon 2D masks do not define a single boundary elevation. "
-            "Use is_occluded_deg or polygon_points_* instead."
-        )
-
-    def boundary_elevation_deg(
-        self,
-        azimuth_deg: Tensor,
-        *,
-        pitch_deg: Tensor,
-        roll_deg: Tensor,
-    ) -> Tensor:
-        raise NotImplementedError(
-            "Closed polygon 2D masks do not define a single boundary elevation. "
-            "Use is_occluded_deg or polygon_points_* instead."
-        )
-
     def is_occluded_deg(
         self,
-        azimuth_deg: Tensor,
-        elevation_deg: Tensor,
-        pitch_deg: Tensor,
-        roll_deg: Tensor,
-        *,
+        azimuth_deg: torch.Tensor,
+        elevation_deg: torch.Tensor,
+        pitch_deg: torch.Tensor,
+        roll_deg: torch.Tensor,
         tolerance_deg: float = 1e-7,
-    ) -> Tensor:
-        azimuth_deg, elevation_deg, pitch_deg, roll_deg = _coerce_query_tensors(
-            azimuth=azimuth_deg,
-            elevation=elevation_deg,
-            pitch=pitch_deg,
-            roll=roll_deg,
-        )
+    ) -> torch.Tensor:
+        if not isinstance(azimuth_deg, torch.Tensor):
+            raise AssertionError("azimuth_deg must be a torch.Tensor")
+        if not isinstance(elevation_deg, torch.Tensor):
+            raise AssertionError("elevation_deg must be a torch.Tensor")
+        if not isinstance(pitch_deg, torch.Tensor):
+            raise AssertionError("pitch_deg must be a torch.Tensor")
+        if not isinstance(roll_deg, torch.Tensor):
+            raise AssertionError("roll_deg must be a torch.Tensor")
+        if azimuth_deg.ndim != 2 or azimuth_deg.shape[1] != 1:
+            raise AssertionError("azimuth_deg must have shape (n, 1)")
+        if elevation_deg.ndim != 2 or elevation_deg.shape[1] != 1:
+            raise AssertionError("elevation_deg must have shape (n, 1)")
+        if pitch_deg.ndim != 2 or pitch_deg.shape[1] != 1:
+            raise AssertionError("pitch_deg must have shape (n, 1)")
+        if roll_deg.ndim != 2 or roll_deg.shape[1] != 1:
+            raise AssertionError("roll_deg must have shape (n, 1)")
+        if elevation_deg.shape != azimuth_deg.shape or pitch_deg.shape != azimuth_deg.shape or roll_deg.shape != azimuth_deg.shape:
+            raise AssertionError("azimuth_deg, elevation_deg, pitch_deg, and roll_deg must all have the same shape (n, 1)")
+        if elevation_deg.device != azimuth_deg.device or pitch_deg.device != azimuth_deg.device or roll_deg.device != azimuth_deg.device:
+            raise AssertionError("azimuth_deg, elevation_deg, pitch_deg, and roll_deg must all be on the same device")
+        if (
+            not torch.is_floating_point(azimuth_deg)
+            or not torch.is_floating_point(elevation_deg)
+            or not torch.is_floating_point(pitch_deg)
+            or not torch.is_floating_point(roll_deg)
+        ):
+            raise AssertionError("azimuth_deg, elevation_deg, pitch_deg, and roll_deg must all be floating point")
+        if tolerance_deg < 0.0:
+            raise AssertionError("tolerance_deg must be non-negative")
+
+        dtype = azimuth_deg.dtype
+        dtype = torch.promote_types(dtype, elevation_deg.dtype)
+        dtype = torch.promote_types(dtype, pitch_deg.dtype)
+        dtype = torch.promote_types(dtype, roll_deg.dtype)
+
+        azimuth_deg = azimuth_deg.to(dtype=dtype)
+        elevation_deg = elevation_deg.to(dtype=dtype)
+        pitch_deg = pitch_deg.to(dtype=dtype)
+        roll_deg = roll_deg.to(dtype=dtype)
+
         polygon = self.polygon_points_deg(
             pitch_deg=pitch_deg,
             roll_deg=roll_deg,
@@ -275,24 +247,44 @@ class TorchAzElMask2D:
 
     def render_ascii_deg(
         self,
-        *,
-        pitch_deg: float | Tensor = 0.0,
-        roll_deg: float | Tensor = 0.0,
+        pitch_deg: Union[float, torch.Tensor] = 0.0,
+        roll_deg: Union[float, torch.Tensor] = 0.0,
         width: int = 61,
         height: int = 21,
-        azimuth_limits_deg: tuple[float, float] | None = None,
-        elevation_limits_deg: tuple[float, float] | None = None,
+        azimuth_limits_deg: Optional[Tuple[float, float]] = None,
+        elevation_limits_deg: Optional[Tuple[float, float]] = None,
     ) -> str:
         """Render one transformed mask state on an az/el plane as ASCII text."""
 
         if width < 9:
-            raise ValueError("width must be at least 9")
+            raise AssertionError("width must be at least 9")
         if height < 7:
-            raise ValueError("height must be at least 7")
+            raise AssertionError("height must be at least 7")
 
-        like = self.points_az_el_rad
-        pitch_tensor = _coerce_single_value(pitch_deg, name="pitch_deg", like=like)
-        roll_tensor = _coerce_single_value(roll_deg, name="roll_deg", like=like)
+        if isinstance(pitch_deg, torch.Tensor):
+            if pitch_deg.numel() != 1:
+                raise AssertionError("pitch_deg must be a float or a single-value tensor")
+            pitch_tensor = pitch_deg.reshape(1, 1).to(device=self.points_az_el_rad.device)
+        else:
+            pitch_tensor = torch.tensor([[float(pitch_deg)]], device=self.points_az_el_rad.device)
+
+        if isinstance(roll_deg, torch.Tensor):
+            if roll_deg.numel() != 1:
+                raise AssertionError("roll_deg must be a float or a single-value tensor")
+            roll_tensor = roll_deg.reshape(1, 1).to(device=self.points_az_el_rad.device)
+        else:
+            roll_tensor = torch.tensor([[float(roll_deg)]], device=self.points_az_el_rad.device)
+
+        if not torch.is_floating_point(pitch_tensor):
+            pitch_tensor = pitch_tensor.to(dtype=self.points_az_el_rad.dtype)
+        if not torch.is_floating_point(roll_tensor):
+            roll_tensor = roll_tensor.to(dtype=self.points_az_el_rad.dtype)
+
+        dtype = torch.promote_types(pitch_tensor.dtype, roll_tensor.dtype)
+        dtype = torch.promote_types(dtype, self.points_az_el_rad.dtype)
+        pitch_tensor = pitch_tensor.to(dtype=dtype)
+        roll_tensor = roll_tensor.to(dtype=dtype)
+
         points = self.transformed_points_deg(
             pitch_deg=pitch_tensor,
             roll_deg=roll_tensor,
@@ -319,9 +311,9 @@ class TorchAzElMask2D:
             el_min, el_max = elevation_limits_deg
 
         if not az_min < az_max:
-            raise ValueError("azimuth_limits_deg must satisfy min < max")
+            raise AssertionError("azimuth_limits_deg must satisfy min < max")
         if not el_min < el_max:
-            raise ValueError("elevation_limits_deg must satisfy min < max")
+            raise AssertionError("elevation_limits_deg must satisfy min < max")
 
         grid = [[" " for _ in range(width)] for _ in range(height)]
 
@@ -347,7 +339,7 @@ class TorchAzElMask2D:
             grid[to_row(0.0)][to_col(0.0)] = "+"
 
         polygon_points = torch.cat([points, points[:1]], dim=0)
-        for start, end in zip(polygon_points[:-1], polygon_points[1:], strict=True):
+        for start, end in zip(polygon_points[:-1], polygon_points[1:]):
             start_col = to_col(float(start[0].item()))
             start_row = to_row(float(start[1].item()))
             end_col = to_col(float(end[0].item()))
@@ -360,7 +352,7 @@ class TorchAzElMask2D:
                 row = int(round(start_row + alpha * (end_row - start_row)))
                 grid[row][col] = "#"
 
-        for label, point in zip("ABCDE", points, strict=True):
+        for label, point in zip("ABCDE", points):
             col = to_col(float(point[0].item()))
             row = to_row(float(point[1].item()))
             grid[row][col] = label
@@ -379,6 +371,6 @@ class TorchAzElMask2D:
                 f"{label}=({float(point[0].item()):6.2f} az, "
                 f"{float(point[1].item()):6.2f} el)"
             )
-            for label, point in zip("ABCDE", points, strict=True)
+            for label, point in zip("ABCDE", points)
         ]
         return "\n".join([*header, *body, *footer])

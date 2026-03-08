@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from math import isclose
 
 import pytest
@@ -8,7 +6,7 @@ import torch
 from occlusion_mask import AzElMask2D, TorchAzElMask2D
 
 
-def make_numpy_mask(*, occluded_if: str = "el_ge_boundary") -> AzElMask2D:
+def make_numpy_mask(occluded_if: str = "el_ge_boundary") -> AzElMask2D:
     return AzElMask2D.from_degrees(
         [
             (-40.0, 16.0),
@@ -21,7 +19,7 @@ def make_numpy_mask(*, occluded_if: str = "el_ge_boundary") -> AzElMask2D:
     )
 
 
-def make_torch_mask(*, occluded_if: str = "el_ge_boundary") -> TorchAzElMask2D:
+def make_torch_mask(occluded_if: str = "el_ge_boundary") -> TorchAzElMask2D:
     return TorchAzElMask2D.from_degrees(
         [
             (-40.0, 16.0),
@@ -34,12 +32,12 @@ def make_torch_mask(*, occluded_if: str = "el_ge_boundary") -> TorchAzElMask2D:
     )
 
 
-def column(values: list[float], *, dtype: torch.dtype = torch.float64) -> torch.Tensor:
+def column(values: list[float], dtype: torch.dtype = torch.float64) -> torch.Tensor:
     return torch.tensor(values, dtype=dtype).unsqueeze(1)
 
 
 def test_torch_mask_rejects_unsorted_points() -> None:
-    with pytest.raises(ValueError, match="increasing azimuth"):
+    with pytest.raises(AssertionError, match="increasing azimuth"):
         TorchAzElMask2D.from_degrees(
             [
                 (-20.0, 13.0),
@@ -58,7 +56,7 @@ def test_torch_mask_defaults_to_float32_storage() -> None:
 
 def test_torch_mask_requires_column_vectors() -> None:
     mask = make_torch_mask()
-    with pytest.raises(ValueError, match="shape \\(n, 1\\)"):
+    with pytest.raises(AssertionError, match="shape \\(n, 1\\)"):
         mask.is_occluded_deg(
             torch.tensor([0.0, 5.0]),
             column([12.0, 9.0]),
@@ -69,7 +67,7 @@ def test_torch_mask_requires_column_vectors() -> None:
 
 def test_torch_mask_requires_matching_shapes() -> None:
     mask = make_torch_mask()
-    with pytest.raises(ValueError, match="same shape"):
+    with pytest.raises(AssertionError, match="same shape"):
         mask.is_occluded_deg(
             column([0.0, 5.0]),
             column([12.0, 9.0]),
@@ -187,20 +185,26 @@ def test_torch_mask_matches_numpy_row_by_row() -> None:
 
     expected = [
         [numpy_mask.is_occluded_deg(azimuth_deg=az, elevation_deg=el, pitch_deg=pt, roll_deg=rl)]
-        for az, el, pt, rl in zip(azimuth, elevation, pitch, roll, strict=True)
+        for az, el, pt, rl in zip(azimuth, elevation, pitch, roll)
     ]
     assert torch_result.tolist() == expected
 
 
-def test_torch_boundary_helpers_raise_for_polygon_mode() -> None:
+def test_torch_mask_requires_floating_query_tensors() -> None:
     mask = make_torch_mask()
-
-    with pytest.raises(NotImplementedError, match="single boundary elevation"):
-        mask.boundary_elevation_deg(
+    with pytest.raises(AssertionError, match="floating point"):
+        mask.is_occluded_deg(
+            torch.tensor([[0]], dtype=torch.int64),
+            column([12.0]),
             column([0.0]),
-            pitch_deg=column([0.0]),
-            roll_deg=column([0.0]),
+            column([0.0]),
         )
+
+
+def test_torch_mask_does_not_expose_boundary_helpers() -> None:
+    mask = make_torch_mask()
+    assert not hasattr(mask, "boundary_elevation_deg")
+    assert not hasattr(mask, "boundary_elevation_rad")
 
 
 def test_torch_runtime_smoke() -> None:
@@ -262,7 +266,7 @@ def test_torch_mask_ascii_render_footer_uses_original_point_labels() -> None:
 
 def test_torch_mask_ascii_render_requires_single_state() -> None:
     mask = make_torch_mask()
-    with pytest.raises(ValueError, match="single-value tensor"):
+    with pytest.raises(AssertionError, match="single-value tensor"):
         mask.render_ascii_deg(
             pitch_deg=column([0.0, 1.0]),
             roll_deg=0.0,

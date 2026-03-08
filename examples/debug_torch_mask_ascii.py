@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import torch
 
 from occlusion_mask import TorchAzElMask2D
@@ -59,7 +57,6 @@ def print_vectorized_example(mask: TorchAzElMask2D) -> None:
             pitch_deg.squeeze(1).tolist(),
             roll_deg.squeeze(1).tolist(),
             occluded.squeeze(1).tolist(),
-            strict=True,
         ),
         start=1,
     ):
