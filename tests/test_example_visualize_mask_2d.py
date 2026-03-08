@@ -139,6 +139,23 @@ def test_make_app_includes_mask_point_inputs() -> None:
         assert {"type": "mask-el", "index": point_label} in all_ids
 
 
+def test_input_style_keeps_numeric_values_visible() -> None:
+    app = MODULE.make_app()
+    sensor_volume_panel = app.layout.children[3]
+    volume_input_component = sensor_volume_panel.children[1].children[0].children[1]
+    mask_editor_panel = app.layout.children[4]
+    mask_input_component = mask_editor_panel.children[1].children[0].children[1].children[0].children[1]
+
+    for input_component in (volume_input_component, mask_input_component):
+        style = input_component.style
+        assert style["height"] == "46px"
+        assert style["boxSizing"] == "border-box"
+        assert style["lineHeight"] == "1.2"
+        assert style["color"] == "#13212b"
+        assert style["WebkitTextFillColor"] == "#13212b"
+        assert style["appearance"] == "none"
+
+
 def test_mask_points_from_lists_accepts_ordered_points() -> None:
     points = MODULE.mask_points_from_lists(
         [-45.0, -15.0, 0.0, 18.0, 42.0],

@@ -20,6 +20,25 @@ INITIAL_QUERY_AZ_DEG = 5.0
 INITIAL_QUERY_EL_DEG = 9.0
 DEFAULT_SENSOR_VOLUME_DEG = (-35.0, 35.0, -10.0, 20.0)
 
+INPUT_STYLE = {
+    "width": "100%",
+    "height": "46px",
+    "boxSizing": "border-box",
+    "padding": "0.55rem 0.75rem",
+    "borderRadius": "12px",
+    "fontSize": "0.95rem",
+    "lineHeight": "1.2",
+    "fontFamily": '"Avenir Next", "Helvetica Neue", sans-serif',
+    "fontWeight": "500",
+    "color": "#13212b",
+    "caretColor": "#13212b",
+    "WebkitTextFillColor": "#13212b",
+    "opacity": "1",
+    "appearance": "none",
+    "WebkitAppearance": "none",
+    "MozAppearance": "textfield",
+}
+
 
 def build_mask(mask_points: list[tuple[float, float]] | tuple[tuple[float, float], ...] | None = None) -> AzElMask2D:
     active_mask_points = DEFAULT_MASK_POINTS if mask_points is None else list(mask_points)
@@ -241,13 +260,9 @@ def point_input(*, point_label: str, field_label: str, field_key: str, value: fl
                 debounce=False,
                 inputMode="numeric",
                 style={
-                    "width": "100%",
-                    "padding": "0.65rem 0.75rem",
+                    **INPUT_STYLE,
                     "border": "1px solid #c8b9a2",
-                    "borderRadius": "12px",
                     "backgroundColor": "#fffdf8",
-                    "fontSize": "0.95rem",
-                    "color": "#13212b",
                 },
             ),
         ],
@@ -271,13 +286,9 @@ def volume_input(*, input_id: str, label: str, value: float, step: float) -> htm
                 debounce=False,
                 inputMode="numeric",
                 style={
-                    "width": "100%",
-                    "padding": "0.65rem 0.75rem",
+                    **INPUT_STYLE,
                     "border": "1px solid #b9d4bc",
-                    "borderRadius": "12px",
                     "backgroundColor": "#f8fff7",
-                    "fontSize": "0.95rem",
-                    "color": "#13212b",
                 },
             ),
         ],
